@@ -1,6 +1,6 @@
 # rspacectl
 
-A command-line interface for [RSpace ELN](https://www.researchspace.com/) covering both the electronic lab notebook and the inventory system. Built on the [rspace-client Python SDK](https://github.com/rspace-os/rspace-client-python).
+A command-line interface for [RSpace](https://www.researchspace.com/) covering both the electronic lab notebook and the inventory system. Built on the [rspace-client Python SDK](https://github.com/rspace-os/rspace-client-python).
 
 > **Status:** Alpha — not yet published to PyPI. Install locally using the instructions below.
 
