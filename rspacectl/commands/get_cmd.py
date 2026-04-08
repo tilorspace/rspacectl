@@ -208,18 +208,19 @@ def _get_folder(id: str, include_content: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 _DISPATCH = {
-    "document": _get_document,
-    "notebook": _get_folder,
-    "folder":   _get_folder,
-    "sample":   _get_sample,
+    "document":  _get_document,
+    "notebook":  _get_folder,
+    "folder":    _get_folder,
+    "sample":    _get_sample,
     "subsample": _get_subsample,
     "container": _get_container,
-    "form":     _get_form,
-    "template": _get_template,
-    "file":     _get_file,
+    "bench":     _get_container,
+    "form":      _get_form,
+    "template":  _get_template,
+    "file":      _get_file,
 }
 
-_CONTENT_TYPES = {"folder", "notebook", "container"}
+_CONTENT_TYPES = {"folder", "notebook", "container", "bench"}
 _SUBSAMPLE_TYPES = {"sample"}
 
 _TYPE_ALIASES = {

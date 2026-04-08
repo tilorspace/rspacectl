@@ -23,21 +23,44 @@ def update_document(
     id: str = typer.Argument(..., help="Document ID or GlobalID."),
     name: Optional[str] = typer.Option(None, "--name", "-n"),
     tag: Optional[str] = typer.Option(None, "--tag", help="Replace tags (comma-separated)."),
-    content: Optional[str] = typer.Option(None, "--content", help="Replace first field content (HTML)."),
-    append: Optional[str] = typer.Option(None, "--append", help="Append HTML content to first field."),
-    prepend: Optional[str] = typer.Option(None, "--prepend", help="Prepend HTML content to first field."),
+    content: Optional[str] = typer.Option(None, "--content", help="Replace field content (HTML)."),
+    append: Optional[str] = typer.Option(None, "--append", help="Append HTML content to a field."),
+    prepend: Optional[str] = typer.Option(None, "--prepend", help="Prepend HTML content to a field."),
+    field_id: Optional[int] = typer.Option(
+        None, "--field-id",
+        help="Target a specific field by its numeric ID (use with --content). "
+             "Find field IDs with: rspace get SD123 -o json",
+    ),
+    field_index: int = typer.Option(
+        0, "--field-index",
+        help="Target a specific field by 0-based index (use with --append or --prepend). "
+             "Defaults to 0 (first field).",
+    ),
 ) -> None:
-    """Update an ELN document's name, tags, or content."""
+    """Update an ELN document's name, tags, or content.
+
+    Target a specific field with [bold]--field-id[/bold] (for --content) or
+    [bold]--field-index[/bold] (for --append / --prepend). Field IDs and indices
+    can be found by inspecting the document:
+
+      rspace get SD123 -o json
+    """
     ctx = get_context()
     columns = [COL_GLOBAL_ID, COL_NAME_40, ColumnDef("tags", "Tags", 30), COL_MODIFIED]
     doc_id = parse_id(id)
     try:
         if append:
-            result = ctx.eln.append_content(doc_id, append)
+            result = ctx.eln.append_content(doc_id, append, field_index=field_index)
         elif prepend:
-            result = ctx.eln.prepend_content(doc_id, prepend)
+            result = ctx.eln.prepend_content(doc_id, prepend, field_index=field_index)
         else:
-            fields = [{"content": content}] if content else None
+            if content:
+                field_entry: dict = {"content": content}
+                if field_id is not None:
+                    field_entry["id"] = field_id
+                fields = [field_entry]
+            else:
+                fields = None
             result = ctx.eln.update_document(document_id=doc_id, name=name, tags=tag, fields=fields)
     except Exception as e:
         handle_api_error(e)
