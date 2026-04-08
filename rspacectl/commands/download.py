@@ -22,7 +22,10 @@ def _download_items(ids: List[str], output_dir: Path, get_info_fn, download_fn, 
         item_id = parse_id(raw_id)
         try:
             info = get_info_fn(item_id)
-            filename = info.get("name", f"{label}_{item_id}")
+            # Strip any path components from the server-supplied name to prevent
+            # path traversal (e.g. a malicious server returning "../../.bashrc").
+            raw_name = info.get("name", f"{label}_{item_id}")
+            filename = Path(raw_name).name or f"{label}_{item_id}"
             dest = output_dir / filename
             err_console.print(f"Downloading: {filename}")
             download_fn(item_id, str(dest))

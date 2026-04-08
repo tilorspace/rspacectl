@@ -57,13 +57,29 @@ def load_config(
             f"Run 'rspace configure' to set up credentials, or set environment variables."
         )
 
+    if url.startswith("http://"):
+        from .output import err_console
+        err_console.print(
+            "[yellow]Warning:[/yellow] RSPACE_URL uses HTTP — your API key will be sent "
+            "unencrypted. Use HTTPS unless this is a local development server."
+        )
+
     return url.rstrip("/"), api_key
 
 
 def save_config(url: str, api_key: str) -> None:
-    """Write credentials to ~/.rspacectl."""
-    CONFIG_FILE.write_text(
+    """Write credentials to ~/.rspacectl with mode 600.
+
+    Uses os.open with O_CREAT|O_WRONLY to set permissions atomically on
+    creation, avoiding a window where the file is world-readable.
+    """
+    import os as _os
+    content = (
         f"{URL_KEY}={url.rstrip('/')}\n"
         f"{APIKEY_KEY}={api_key}\n"
     )
-    CONFIG_FILE.chmod(0o600)  # restrict permissions — contains secrets
+    fd = _os.open(CONFIG_FILE, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
+    try:
+        _os.write(fd, content.encode())
+    finally:
+        _os.close(fd)

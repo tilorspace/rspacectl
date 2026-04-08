@@ -89,7 +89,7 @@ def root_callback(
         None,
         "--api-key",
         envvar="RSPACE_API_KEY",
-        help="RSpace API key (overrides config file).",
+        help="RSpace API key (overrides config file). Prefer env var or config file — CLI flags are visible in process listings.",
         show_default=False,
     ),
     version: bool = typer.Option(
