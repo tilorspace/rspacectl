@@ -1,0 +1,52 @@
+[tool.poetry]
+name = "rspacectl"
+version = "0.1.0"
+description = "Command-line interface for RSpace ELN and Inventory"
+authors = ["ResearchSpace <info@researchspace.com>"]
+license = "Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/rspace-os/rspacectl"
+repository = "https://github.com/rspace-os/rspacectl"
+keywords = ["rspace", "eln", "inventory", "cli", "laboratory"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Utilities",
+]
+packages = [{include = "rspacectl"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+typer = ">=0.9"
+rich = ">=13.0"
+rspace-client = ">=2.6.2"
+python-dotenv = ">=1.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-mock = ">=3.10"
+black = ">=23.0"
+ruff = ">=0.1"
+
+[tool.poetry.scripts]
+rspace = "rspacectl.app:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
