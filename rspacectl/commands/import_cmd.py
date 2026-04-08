@@ -59,7 +59,9 @@ def import_word(
 def import_tree(
     directory: Path = typer.Argument(..., help="Directory to import recursively."),
     folder: Optional[str] = typer.Option(None, "--folder", help="Destination parent folder ID."),
-    ignore_hidden: bool = typer.Option(True, "--ignore-hidden/--include-hidden", help="Skip hidden folders."),
+    ignore_hidden: bool = typer.Option(
+        True, "--ignore-hidden/--include-hidden", help="Skip hidden folders."
+    ),
     halt_on_error: bool = typer.Option(False, "--halt-on-error", help="Stop on first error."),
 ) -> None:
     """Import a directory tree into RSpace, preserving folder structure.

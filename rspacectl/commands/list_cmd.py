@@ -35,6 +35,7 @@ app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 # Shared helper
 # ---------------------------------------------------------------------------
 
+
 def _eln_pagination(page: int, page_size: int, order_by: Optional[str], sort_order: str) -> dict:
     """Build kwargs dict for ELN client pagination parameters."""
     kwargs: dict = {"page_number": page, "page_size": page_size}
@@ -43,13 +44,18 @@ def _eln_pagination(page: int, page_size: int, order_by: Optional[str], sort_ord
     return kwargs
 
 
-def _inv_pagination(page: int, page_size: int, order_by: Optional[str], sort_order: str) -> Pagination:
-    return Pagination(page_number=page, page_size=page_size, order_by=order_by, sort_order=sort_order)
+def _inv_pagination(
+    page: int, page_size: int, order_by: Optional[str], sort_order: str
+) -> Pagination:
+    return Pagination(
+        page_number=page, page_size=page_size, order_by=order_by, sort_order=sort_order
+    )
 
 
 # ---------------------------------------------------------------------------
 # Shared folder/notebook listing (used by both list_folders and list_notebooks)
 # ---------------------------------------------------------------------------
+
 
 def _list_folder_type(parent: Optional[str], type_filter: str) -> None:
     ctx = get_context()
@@ -67,6 +73,7 @@ def _list_folder_type(parent: Optional[str], type_filter: str) -> None:
 # documents
 # ---------------------------------------------------------------------------
 
+
 @app.command("documents")
 def list_documents(
     query: Optional[str] = typer.Option(None, "--query", "-q", help="Full-text search query."),
@@ -74,7 +81,9 @@ def list_documents(
     form: Optional[str] = typer.Option(None, "--form", help="Filter by form ID or name."),
     page: int = typer.Option(0, "--page", help="Page number (0-based)."),
     page_size: int = typer.Option(20, "--page-size", help="Results per page."),
-    order_by: Optional[str] = typer.Option("lastModified", "--order-by", help="Sort field: name, created, lastModified."),
+    order_by: Optional[str] = typer.Option(
+        "lastModified", "--order-by", help="Sort field: name, created, lastModified."
+    ),
     sort_order: str = typer.Option("desc", "--sort-order", help="asc or desc."),
 ) -> None:
     """List ELN documents."""
@@ -110,6 +119,7 @@ def list_documents(
 # notebooks
 # ---------------------------------------------------------------------------
 
+
 @app.command("notebooks")
 def list_notebooks(
     parent: Optional[str] = typer.Option(None, "--parent", help="Parent folder ID."),
@@ -121,6 +131,7 @@ def list_notebooks(
 # ---------------------------------------------------------------------------
 # folders
 # ---------------------------------------------------------------------------
+
 
 @app.command("folders")
 def list_folders(
@@ -134,14 +145,19 @@ def list_folders(
 # samples
 # ---------------------------------------------------------------------------
 
+
 @app.command("samples")
 def list_samples(
-    query: Optional[str] = typer.Option(None, "--query", "-q", help="Search query (name, description, tags)."),
+    query: Optional[str] = typer.Option(
+        None, "--query", "-q", help="Search query (name, description, tags)."
+    ),
     owned_by: Optional[str] = typer.Option(None, "--owned-by", help="Filter by owner username."),
     deleted: bool = typer.Option(False, "--deleted", help="Include deleted samples."),
     page: int = typer.Option(0, "--page"),
     page_size: int = typer.Option(20, "--page-size"),
-    order_by: Optional[str] = typer.Option(None, "--order-by", help="Sort field: name, created, lastModified."),
+    order_by: Optional[str] = typer.Option(
+        None, "--order-by", help="Sort field: name, created, lastModified."
+    ),
     sort_order: str = typer.Option("asc", "--sort-order"),
 ) -> None:
     """List inventory samples."""
@@ -158,7 +174,9 @@ def list_samples(
     try:
         pagination = _inv_pagination(page, page_size, order_by, sort_order)
         if query:
-            result = ctx.inv.search(query=query, pagination=pagination, result_type=ResultType.SAMPLE)
+            result = ctx.inv.search(
+                query=query, pagination=pagination, result_type=ResultType.SAMPLE
+            )
             data = result.get("records", [])
         else:
             deleted_filter = DeletedItemFilter.INCLUDE if deleted else DeletedItemFilter.EXCLUDE
@@ -174,6 +192,7 @@ def list_samples(
 # ---------------------------------------------------------------------------
 # subsamples
 # ---------------------------------------------------------------------------
+
 
 @app.command("subsamples")
 def list_subsamples(
@@ -192,7 +211,9 @@ def list_subsamples(
     ]
     try:
         pagination = _inv_pagination(page, page_size, None, "asc")
-        result = ctx.inv.search(query=query or "", pagination=pagination, result_type=ResultType.SUBSAMPLE)
+        result = ctx.inv.search(
+            query=query or "", pagination=pagination, result_type=ResultType.SUBSAMPLE
+        )
         data = result.get("records", [])
     except Exception as e:
         handle_api_error(e)
@@ -204,12 +225,17 @@ def list_subsamples(
 # containers
 # ---------------------------------------------------------------------------
 
+
 @app.command("containers")
 def list_containers(
-    query: Optional[str] = typer.Option(None, "--query", "-q", help="Search query (name, description, tags)."),
+    query: Optional[str] = typer.Option(
+        None, "--query", "-q", help="Search query (name, description, tags)."
+    ),
     page: int = typer.Option(0, "--page"),
     page_size: int = typer.Option(20, "--page-size"),
-    order_by: Optional[str] = typer.Option(None, "--order-by", help="Sort field: name, created, lastModified."),
+    order_by: Optional[str] = typer.Option(
+        None, "--order-by", help="Sort field: name, created, lastModified."
+    ),
     sort_order: str = typer.Option("asc", "--sort-order"),
 ) -> None:
     """List top-level inventory containers."""
@@ -224,7 +250,9 @@ def list_containers(
     try:
         pagination = _inv_pagination(page, page_size, order_by, sort_order)
         if query:
-            result = ctx.inv.search(query=query, pagination=pagination, result_type=ResultType.CONTAINER)
+            result = ctx.inv.search(
+                query=query, pagination=pagination, result_type=ResultType.CONTAINER
+            )
             data = result.get("records", [])
         else:
             result = ctx.inv.list_top_level_containers(pagination=pagination)
@@ -239,12 +267,17 @@ def list_containers(
 # files
 # ---------------------------------------------------------------------------
 
+
 @app.command("files")
 def list_files(
-    media_type: str = typer.Option("image", "--type", help="Media type: image, document, chemFile, etc."),
+    media_type: str = typer.Option(
+        "image", "--type", help="Media type: image, document, chemFile, etc."
+    ),
     page: int = typer.Option(0, "--page"),
     page_size: int = typer.Option(20, "--page-size"),
-    order_by: Optional[str] = typer.Option("lastModified", "--order-by", help="Sort field: name, created, lastModified, size."),
+    order_by: Optional[str] = typer.Option(
+        "lastModified", "--order-by", help="Sort field: name, created, lastModified, size."
+    ),
     sort_order: str = typer.Option("desc", "--sort-order"),
 ) -> None:
     """List gallery files."""
@@ -274,12 +307,15 @@ def list_files(
 # forms
 # ---------------------------------------------------------------------------
 
+
 @app.command("forms")
 def list_forms(
     query: Optional[str] = typer.Option(None, "--query", "-q"),
     page: int = typer.Option(0, "--page"),
     page_size: int = typer.Option(20, "--page-size"),
-    order_by: Optional[str] = typer.Option("lastModified", "--order-by", help="Sort field: name, created, lastModified."),
+    order_by: Optional[str] = typer.Option(
+        "lastModified", "--order-by", help="Sort field: name, created, lastModified."
+    ),
     sort_order: str = typer.Option("desc", "--sort-order"),
 ) -> None:
     """List document forms (templates)."""
@@ -309,6 +345,7 @@ def list_forms(
 # templates (sample templates)
 # ---------------------------------------------------------------------------
 
+
 @app.command("templates")
 def list_templates(
     page: int = typer.Option(0, "--page"),
@@ -330,6 +367,7 @@ def list_templates(
 # ---------------------------------------------------------------------------
 # groups
 # ---------------------------------------------------------------------------
+
 
 @app.command("groups")
 def list_groups() -> None:
@@ -353,9 +391,12 @@ def list_groups() -> None:
 # users (sysadmin)
 # ---------------------------------------------------------------------------
 
+
 @app.command("users")
 def list_users(
-    created_before: Optional[str] = typer.Option(None, "--created-before", help="ISO date, e.g. 2024-01-01"),
+    created_before: Optional[str] = typer.Option(
+        None, "--created-before", help="ISO date, e.g. 2024-01-01"
+    ),
     page: int = typer.Option(0, "--page"),
     page_size: int = typer.Option(20, "--page-size"),
 ) -> None:
@@ -386,6 +427,7 @@ def list_users(
 # ---------------------------------------------------------------------------
 # activity
 # ---------------------------------------------------------------------------
+
 
 @app.command("activity")
 def list_activity(
@@ -428,6 +470,7 @@ def list_activity(
 # ---------------------------------------------------------------------------
 # workbenches
 # ---------------------------------------------------------------------------
+
 
 @app.command("workbenches")
 def list_workbenches() -> None:

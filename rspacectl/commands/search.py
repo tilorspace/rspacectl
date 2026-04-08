@@ -6,7 +6,15 @@ import typer
 from rspace_client.inv.inv import Pagination, ResultType
 
 from ..context import get_context
-from ..output import COL_CREATED, COL_GLOBAL_ID, COL_MODIFIED, COL_NAME_40, ColumnDef, err_console, print_result
+from ..output import (
+    COL_CREATED,
+    COL_GLOBAL_ID,
+    COL_MODIFIED,
+    COL_NAME_40,
+    ColumnDef,
+    err_console,
+    print_result,
+)
 
 _TYPE_CHOICES = ["documents", "samples", "subsamples", "containers", "all"]
 
@@ -26,13 +34,17 @@ _COMBINED_COLUMNS = [
 
 def search(
     query: str = typer.Argument(..., help="Search query string."),
-    type: str = typer.Option("all", "--type", "-t", help=f"Resource type: {', '.join(_TYPE_CHOICES)}."),
+    type: str = typer.Option(
+        "all", "--type", "-t", help=f"Resource type: {', '.join(_TYPE_CHOICES)}."
+    ),
     page: int = typer.Option(0, "--page"),
     page_size: int = typer.Option(20, "--page-size"),
 ) -> None:
     """Search across documents and/or inventory items."""
     if type not in _TYPE_CHOICES:
-        err_console.print(f"[red]Invalid --type '{type}'. Choose from: {', '.join(_TYPE_CHOICES)}[/red]")
+        err_console.print(
+            f"[red]Invalid --type '{type}'. Choose from: {', '.join(_TYPE_CHOICES)}[/red]"
+        )
         raise typer.Exit(1)
 
     ctx = get_context()

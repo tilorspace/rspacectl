@@ -21,7 +21,9 @@ def split(
     id: str = typer.Argument(..., help="Subsample GlobalID or ID to split (e.g. SS123)."),
     count: int = typer.Option(..., "--count", "-n", help="Number of new subsamples to create."),
     quantity: Optional[float] = typer.Option(
-        None, "--quantity", "-q",
+        None,
+        "--quantity",
+        "-q",
         help="Quantity per new subsample. If omitted, quantity is split evenly.",
     ),
 ) -> None:

@@ -114,6 +114,7 @@ def print_single(item: Dict[str, Any], fmt: OutputFormat, columns: List[ColumnDe
 # Internal renderers
 # ---------------------------------------------------------------------------
 
+
 def _print_json(data: Any) -> None:
     print_json(json.dumps(data, default=str))
 

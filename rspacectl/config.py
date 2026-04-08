@@ -59,6 +59,7 @@ def load_config(
 
     if url.startswith("http://"):
         from .output import err_console
+
         err_console.print(
             "[yellow]Warning:[/yellow] RSPACE_URL uses HTTP — your API key will be sent "
             "unencrypted. Use HTTPS unless this is a local development server."
@@ -74,10 +75,8 @@ def save_config(url: str, api_key: str) -> None:
     creation, avoiding a window where the file is world-readable.
     """
     import os as _os
-    content = (
-        f"{URL_KEY}={url.rstrip('/')}\n"
-        f"{APIKEY_KEY}={api_key}\n"
-    )
+
+    content = f"{URL_KEY}={url.rstrip('/')}\n" f"{APIKEY_KEY}={api_key}\n"
     fd = _os.open(CONFIG_FILE, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
     try:
         _os.write(fd, content.encode())

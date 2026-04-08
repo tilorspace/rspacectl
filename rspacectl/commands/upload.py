@@ -8,7 +8,15 @@ import typer
 from ..context import get_context
 from ..exceptions import handle_api_error
 from ..ids import parse_id
-from ..output import COL_CREATED, COL_GLOBAL_ID, COL_NAME_40, ColumnDef, console, err_console, print_result
+from ..output import (
+    COL_CREATED,
+    COL_GLOBAL_ID,
+    COL_NAME_40,
+    ColumnDef,
+    console,
+    err_console,
+    print_result,
+)
 from ..utils import batch_run
 
 app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
@@ -18,7 +26,9 @@ app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 def upload_file(
     paths: List[Path] = typer.Argument(..., help="File path(s) to upload to the Gallery."),
     folder: Optional[str] = typer.Option(None, "--folder", help="Destination gallery folder ID."),
-    caption: Optional[str] = typer.Option(None, "--caption", help="Caption applied to all uploaded files."),
+    caption: Optional[str] = typer.Option(
+        None, "--caption", help="Caption applied to all uploaded files."
+    ),
 ) -> None:
     """Upload one or more files to the RSpace Gallery."""
     ctx = get_context()

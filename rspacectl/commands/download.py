@@ -44,7 +44,9 @@ def _download_items(ids: List[str], output_dir: Path, get_info_fn, download_fn, 
 @app.command("file")
 def download_file(
     ids: List[str] = typer.Argument(..., help="Gallery file ID(s) or GlobalID(s)."),
-    output_dir: Path = typer.Option(Path("."), "--output-dir", "-d", help="Directory to save files."),
+    output_dir: Path = typer.Option(
+        Path("."), "--output-dir", "-d", help="Directory to save files."
+    ),
 ) -> None:
     """Download one or more gallery files."""
     ctx = get_context()
@@ -54,12 +56,15 @@ def download_file(
 @app.command("attachment")
 def download_attachment(
     ids: List[str] = typer.Argument(..., help="Attachment ID(s)."),
-    output_dir: Path = typer.Option(Path("."), "--output-dir", "-d", help="Directory to save files."),
+    output_dir: Path = typer.Option(
+        Path("."), "--output-dir", "-d", help="Directory to save files."
+    ),
 ) -> None:
     """Download one or more inventory attachments."""
     ctx = get_context()
     _download_items(
-        ids, output_dir,
+        ids,
+        output_dir,
         ctx.inv.get_attachment_by_id,
         ctx.inv.download_attachment_by_id,
         "attachment",

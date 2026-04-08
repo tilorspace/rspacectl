@@ -68,6 +68,7 @@ app.command("tag")(tag.tag)
 # Root callback — runs before every command, initialises context
 # ---------------------------------------------------------------------------
 
+
 @app.callback()
 def root_callback(
     ctx: typer.Context,

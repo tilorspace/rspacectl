@@ -8,7 +8,15 @@ from rspace_client.inv.inv import Tag as InvTag
 from ..context import get_context
 from ..exceptions import handle_api_error
 from ..ids import parse_id
-from ..output import COL_GLOBAL_ID, COL_MODIFIED, COL_NAME_35, COL_NAME_40, ColumnDef, console, print_single
+from ..output import (
+    COL_GLOBAL_ID,
+    COL_MODIFIED,
+    COL_NAME_35,
+    COL_NAME_40,
+    ColumnDef,
+    console,
+    print_single,
+)
 from ..utils import parse_tags
 
 app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
@@ -18,6 +26,7 @@ app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 # document
 # ---------------------------------------------------------------------------
 
+
 @app.command("document")
 def update_document(
     id: str = typer.Argument(..., help="Document ID or GlobalID."),
@@ -25,16 +34,20 @@ def update_document(
     tag: Optional[str] = typer.Option(None, "--tag", help="Replace tags (comma-separated)."),
     content: Optional[str] = typer.Option(None, "--content", help="Replace field content (HTML)."),
     append: Optional[str] = typer.Option(None, "--append", help="Append HTML content to a field."),
-    prepend: Optional[str] = typer.Option(None, "--prepend", help="Prepend HTML content to a field."),
+    prepend: Optional[str] = typer.Option(
+        None, "--prepend", help="Prepend HTML content to a field."
+    ),
     field_id: Optional[int] = typer.Option(
-        None, "--field-id",
+        None,
+        "--field-id",
         help="Target a specific field by its numeric ID (use with --content). "
-             "Find field IDs with: rspace get SD123 -o json",
+        "Find field IDs with: rspace get SD123 -o json",
     ),
     field_index: int = typer.Option(
-        0, "--field-index",
+        0,
+        "--field-index",
         help="Target a specific field by 0-based index (use with --append or --prepend). "
-             "Defaults to 0 (first field).",
+        "Defaults to 0 (first field).",
     ),
 ) -> None:
     """Update an ELN document's name, tags, or content.
@@ -73,6 +86,7 @@ def update_document(
 # sample
 # ---------------------------------------------------------------------------
 
+
 @app.command("sample")
 def update_sample(
     id: str = typer.Argument(..., help="Sample ID or GlobalID."),
@@ -82,10 +96,17 @@ def update_sample(
 ) -> None:
     """Update an inventory sample's name, description, or tags."""
     ctx = get_context()
-    columns = [COL_GLOBAL_ID, COL_NAME_35, ColumnDef("description", "Description", 40), COL_MODIFIED]
+    columns = [
+        COL_GLOBAL_ID,
+        COL_NAME_35,
+        ColumnDef("description", "Description", 40),
+        COL_MODIFIED,
+    ]
 
     if not name and not description and not tag:
-        typer.echo("Nothing to update. Provide at least one of --name, --description, --tag.", err=True)
+        typer.echo(
+            "Nothing to update. Provide at least one of --name, --description, --tag.", err=True
+        )
         raise typer.Exit(1)
 
     try:

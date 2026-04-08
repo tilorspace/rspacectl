@@ -7,12 +7,20 @@ from unittest.mock import patch
 
 import pytest
 
-from rspacectl.output import ColumnDef, OutputFormat, _cell_value, _get_nested, _truncate_timestamp, print_result
+from rspacectl.output import (
+    ColumnDef,
+    OutputFormat,
+    _cell_value,
+    _get_nested,
+    _truncate_timestamp,
+    print_result,
+)
 
 
 # ---------------------------------------------------------------------------
 # Unit tests for helper functions
 # ---------------------------------------------------------------------------
+
 
 class TestGetNested:
     def test_simple_key(self):
@@ -89,6 +97,7 @@ class TestPrintResultJson:
         text = captured.out
         # remove ANSI escape sequences for JSON parsing
         import re
+
         clean = re.sub(r"\x1b\[[0-9;]*m", "", text).strip()
         parsed = json.loads(clean)
         assert len(parsed) == 2

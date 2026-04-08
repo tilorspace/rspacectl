@@ -22,9 +22,13 @@ _COLUMNS = [
 def share(
     ids: List[str] = typer.Argument(..., help="Document GlobalID(s) or ID(s) to share."),
     group: str = typer.Option(..., "--group", "-g", help="Group ID to share with."),
-    permission: str = typer.Option("read", "--permission", "-p", help="Permission level: read or edit."),
+    permission: str = typer.Option(
+        "read", "--permission", "-p", help="Permission level: read or edit."
+    ),
     shared_folder: Optional[str] = typer.Option(
-        None, "--shared-folder", help="Shared folder ID (uses group default if omitted).",
+        None,
+        "--shared-folder",
+        help="Shared folder ID (uses group default if omitted).",
     ),
 ) -> None:
     """Share one or more ELN documents with a group.
@@ -34,7 +38,9 @@ def share(
       rspace share SD123 SD124 --group 5 --permission edit
     """
     if permission not in _PERMISSION_CHOICES:
-        err_console.print(f"[red]Invalid permission '{permission}'. Choose: {', '.join(_PERMISSION_CHOICES)}[/red]")
+        err_console.print(
+            f"[red]Invalid permission '{permission}'. Choose: {', '.join(_PERMISSION_CHOICES)}[/red]"
+        )
         raise typer.Exit(1)
 
     ctx = get_context()

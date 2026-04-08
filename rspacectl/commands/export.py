@@ -16,13 +16,21 @@ _SCOPE_CHOICES = ["user", "group", "selection"]
 
 def export(
     format: str = typer.Option("xml", "--format", "-f", help="Export format: xml or html."),
-    scope: str = typer.Option("user", "--scope", "-s", help="Export scope: user, group, or selection."),
+    scope: str = typer.Option(
+        "user", "--scope", "-s", help="Export scope: user, group, or selection."
+    ),
     ids: Optional[List[str]] = typer.Option(
-        None, "--id", help="Item IDs for selection scope (repeat for multiple).",
+        None,
+        "--id",
+        help="Item IDs for selection scope (repeat for multiple).",
     ),
     output_file: Path = typer.Option(Path("rspace_export.zip"), "--output-file", "-o"),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for export and download (default: wait)."),
-    uid: Optional[str] = typer.Option(None, "--uid", help="User ID for user-scoped exports (sysadmin)."),
+    wait: bool = typer.Option(
+        True, "--wait/--no-wait", help="Wait for export and download (default: wait)."
+    ),
+    uid: Optional[str] = typer.Option(
+        None, "--uid", help="User ID for user-scoped exports (sysadmin)."
+    ),
     include_revisions: bool = typer.Option(False, "--include-revisions"),
 ) -> None:
     """Export RSpace ELN data to an archive file.
@@ -34,10 +42,14 @@ def export(
       rspace export --format html --scope selection --id SD123 --id SD456
     """
     if format not in _FORMAT_CHOICES:
-        err_console.print(f"[red]Invalid format '{format}'. Choose: {', '.join(_FORMAT_CHOICES)}[/red]")
+        err_console.print(
+            f"[red]Invalid format '{format}'. Choose: {', '.join(_FORMAT_CHOICES)}[/red]"
+        )
         raise typer.Exit(1)
     if scope not in _SCOPE_CHOICES:
-        err_console.print(f"[red]Invalid scope '{scope}'. Choose: {', '.join(_SCOPE_CHOICES)}[/red]")
+        err_console.print(
+            f"[red]Invalid scope '{scope}'. Choose: {', '.join(_SCOPE_CHOICES)}[/red]"
+        )
         raise typer.Exit(1)
     if scope == "selection" and not ids:
         err_console.print("[red]--id is required when --scope is 'selection'.[/red]")

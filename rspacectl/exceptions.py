@@ -18,8 +18,7 @@ def handle_api_error(exc: Exception) -> NoReturn:
     """Format and exit on SDK API errors."""
     if isinstance(exc, ClientBase.AuthenticationError):
         exit_with_error(
-            "Authentication failed. Check your RSPACE_API_KEY is correct.\n"
-            f"  Detail: {exc}"
+            "Authentication failed. Check your RSPACE_API_KEY is correct.\n" f"  Detail: {exc}"
         )
     elif isinstance(exc, ClientBase.ApiError):
         status = getattr(exc, "response_status_code", "unknown")

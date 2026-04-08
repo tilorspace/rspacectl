@@ -15,7 +15,9 @@ app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 
 def _batch_delete(ids: List[str], delete_fn, resource_label: str) -> None:
     """Delete each id via delete_fn, report summary, exit 1 on any failure."""
-    successes, failures = batch_run(ids, lambda raw_id: delete_fn(parse_id(raw_id)), f"delete {resource_label}")
+    successes, failures = batch_run(
+        ids, lambda raw_id: delete_fn(parse_id(raw_id)), f"delete {resource_label}"
+    )
     console.print(f"[green]Deleted {len(successes)} {resource_label}(s).[/green]")
     if failures:
         err_console.print(f"[yellow]Failed ({len(failures)}):[/yellow] {', '.join(failures)}")

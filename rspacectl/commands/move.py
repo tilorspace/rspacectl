@@ -17,11 +17,17 @@ def move(
     ids: List[str] = typer.Argument(..., help="Item GlobalID(s) or ID(s) to move."),
     target: str = typer.Option(..., "--target", "-t", help="Target container GlobalID or ID."),
     strategy: Optional[str] = typer.Option(
-        None, "--strategy", "-s",
+        None,
+        "--strategy",
+        "-s",
         help="Auto-fill strategy for grid containers: 'row' or 'column'.",
     ),
-    row: Optional[int] = typer.Option(None, "--row", help="Starting row index (1-based) for grid placement."),
-    col: Optional[int] = typer.Option(None, "--col", help="Starting column index (1-based) for grid placement."),
+    row: Optional[int] = typer.Option(
+        None, "--row", help="Starting row index (1-based) for grid placement."
+    ),
+    col: Optional[int] = typer.Option(
+        None, "--col", help="Starting column index (1-based) for grid placement."
+    ),
 ) -> None:
     """Move one or more inventory items into a container.
 
@@ -37,7 +43,9 @@ def move(
       rspace move SS123 --target IC456 --row 2 --col 3
     """
     if strategy and strategy not in _STRATEGY_CHOICES:
-        err_console.print(f"[red]Invalid strategy '{strategy}'. Choose: {', '.join(_STRATEGY_CHOICES)}[/red]")
+        err_console.print(
+            f"[red]Invalid strategy '{strategy}'. Choose: {', '.join(_STRATEGY_CHOICES)}[/red]"
+        )
         raise typer.Exit(1)
 
     ctx = get_context()

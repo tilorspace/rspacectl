@@ -59,13 +59,16 @@ _DOCUMENT_COLUMNS = [
 # Per-type getter helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_document(id: str) -> None:
     ctx = get_context()
     columns = [
-        COL_GLOBAL_ID, COL_NAME_40,
+        COL_GLOBAL_ID,
+        COL_NAME_40,
         ColumnDef("form.name", "Form", 20),
         ColumnDef("tags", "Tags", 30),
-        COL_CREATED, COL_MODIFIED,
+        COL_CREATED,
+        COL_MODIFIED,
         ColumnDef("createdBy", "Owner", 20),
     ]
     try:
@@ -78,14 +81,16 @@ def _get_document(id: str) -> None:
 def _get_sample(id: str, include_subsamples: bool = False) -> None:
     ctx = get_context()
     columns = [
-        COL_GLOBAL_ID, COL_NAME_35,
+        COL_GLOBAL_ID,
+        COL_NAME_35,
         ColumnDef("description", "Description", 40),
         ColumnDef("quantity.numericValue", "Quantity", 10),
         ColumnDef("quantity.unitId", "Unit", 8),
         ColumnDef("subSamplesCount", "Subsamples", 10),
         ColumnDef("expiryDate", "Expiry", 16),
         ColumnDef("tags", "Tags", 30),
-        COL_CREATED, COL_OWNER,
+        COL_CREATED,
+        COL_OWNER,
     ]
     try:
         result = ctx.inv.get_sample_by_id(parse_id(id))
@@ -103,7 +108,8 @@ def _get_sample(id: str, include_subsamples: bool = False) -> None:
 def _get_subsample(id: str) -> None:
     ctx = get_context()
     columns = [
-        COL_GLOBAL_ID, COL_NAME_35,
+        COL_GLOBAL_ID,
+        COL_NAME_35,
         ColumnDef("quantity.numericValue", "Quantity", 10),
         ColumnDef("quantity.unitId", "Unit", 8),
         ColumnDef("notes", "Notes", 40),
@@ -119,12 +125,14 @@ def _get_subsample(id: str) -> None:
 def _get_container(id: str, include_content: bool = False) -> None:
     ctx = get_context()
     columns = [
-        COL_GLOBAL_ID, COL_NAME_35,
+        COL_GLOBAL_ID,
+        COL_NAME_35,
         ColumnDef("cType", "Type", 10),
         ColumnDef("description", "Description", 40),
         ColumnDef("canStoreSamples", "Stores Samples", 14),
         ColumnDef("canStoreContainers", "Stores Containers", 18),
-        COL_CREATED, COL_OWNER,
+        COL_CREATED,
+        COL_OWNER,
     ]
     try:
         result = ctx.inv.get_container_by_id(parse_id(id), include_content=include_content)
@@ -136,7 +144,8 @@ def _get_container(id: str, include_content: bool = False) -> None:
 def _get_form(id: str) -> None:
     ctx = get_context()
     columns = [
-        COL_GLOBAL_ID, COL_NAME_40,
+        COL_GLOBAL_ID,
+        COL_NAME_40,
         ColumnDef("formState", "State", 12),
         ColumnDef("version", "Version", 8),
         ColumnDef("tags", "Tags", 30),
@@ -152,9 +161,12 @@ def _get_form(id: str) -> None:
 def _get_template(id: str) -> None:
     ctx = get_context()
     columns = [
-        COL_GLOBAL_ID, COL_NAME_35,
+        COL_GLOBAL_ID,
+        COL_NAME_35,
         ColumnDef("description", "Description", 40),
-        COL_CREATED, COL_MODIFIED, COL_OWNER,
+        COL_CREATED,
+        COL_MODIFIED,
+        COL_OWNER,
     ]
     try:
         result = ctx.inv.get_sample_template_by_id(parse_id(id))
@@ -166,7 +178,8 @@ def _get_template(id: str) -> None:
 def _get_file(id: str) -> None:
     ctx = get_context()
     columns = [
-        COL_GLOBAL_ID, COL_NAME_40,
+        COL_GLOBAL_ID,
+        COL_NAME_40,
         ColumnDef("contentType", "Content Type", 25),
         ColumnDef("size", "Size", 12),
         COL_CREATED,
@@ -181,9 +194,11 @@ def _get_file(id: str) -> None:
 def _get_folder(id: str, include_content: bool = False) -> None:
     ctx = get_context()
     columns = [
-        COL_GLOBAL_ID, COL_NAME_40,
+        COL_GLOBAL_ID,
+        COL_NAME_40,
         ColumnDef("notebook", "Is Notebook", 12),
-        COL_CREATED, COL_MODIFIED,
+        COL_CREATED,
+        COL_MODIFIED,
     ]
     try:
         result = ctx.eln.get_folder(parse_id(id))
@@ -208,37 +223,38 @@ def _get_folder(id: str, include_content: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 _DISPATCH = {
-    "document":  _get_document,
-    "notebook":  _get_folder,
-    "folder":    _get_folder,
-    "sample":    _get_sample,
+    "document": _get_document,
+    "notebook": _get_folder,
+    "folder": _get_folder,
+    "sample": _get_sample,
     "subsample": _get_subsample,
     "container": _get_container,
-    "bench":     _get_container,
-    "form":      _get_form,
-    "template":  _get_template,
-    "file":      _get_file,
+    "bench": _get_container,
+    "form": _get_form,
+    "template": _get_template,
+    "file": _get_file,
 }
 
 _CONTENT_TYPES = {"folder", "notebook", "container", "bench"}
 _SUBSAMPLE_TYPES = {"sample"}
 
 _TYPE_ALIASES = {
-    "doc":       "document",
-    "nb":        "notebook",
-    "note":      "notebook",
+    "doc": "document",
+    "nb": "notebook",
+    "note": "notebook",
     "subsample": "subsample",
-    "sub":       "subsample",
+    "sub": "subsample",
     "container": "container",
-    "cont":      "container",
-    "tmpl":      "template",
-    "templ":     "template",
+    "cont": "container",
+    "tmpl": "template",
+    "templ": "template",
 }
 
 
 # ---------------------------------------------------------------------------
 # Public command
 # ---------------------------------------------------------------------------
+
 
 def get(
     type_or_id: str = typer.Argument(
@@ -250,11 +266,13 @@ def get(
         help="ID when an explicit type is given as the first argument.",
     ),
     subsamples: bool = typer.Option(
-        False, "--subsamples",
+        False,
+        "--subsamples",
         help="[sample] Also list subsamples.",
     ),
     content: bool = typer.Option(
-        False, "--content",
+        False,
+        "--content",
         help="[folder/notebook/container] Also list contents.",
     ),
 ) -> None:
@@ -298,8 +316,7 @@ def get(
     handler = _DISPATCH.get(rtype)
     if handler is None:
         typer.echo(
-            f"Unknown resource type '{rtype}'. "
-            f"Valid types: {', '.join(sorted(_DISPATCH))}.",
+            f"Unknown resource type '{rtype}'. " f"Valid types: {', '.join(sorted(_DISPATCH))}.",
             err=True,
         )
         raise typer.Exit(1)

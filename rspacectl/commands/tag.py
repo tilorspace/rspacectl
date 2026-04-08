@@ -55,9 +55,7 @@ def tag(
                 params={"tags": tag_objects},
             )
             tag_vals = ", ".join(t.get("value", "") for t in (result.get("tags") or []))
-            console.print(
-                f"[green]Tagged {rtype}[/green] {result.get('globalId')}: {tag_vals}"
-            )
+            console.print(f"[green]Tagged {rtype}[/green] {result.get('globalId')}: {tag_vals}")
         else:
             typer.echo(
                 f"Cannot tag resource type '{rtype}' (ID: {id}). "

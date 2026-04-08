@@ -35,13 +35,16 @@ _SIMPLE_COLUMNS = [COL_GLOBAL_ID, COL_NAME_40, COL_CREATED]
 # document
 # ---------------------------------------------------------------------------
 
+
 @app.command("document")
 def create_document(
     name: str = typer.Option(..., "--name", "-n", help="Document name."),
     folder: Optional[str] = typer.Option(None, "--folder", help="Parent folder ID."),
     tag: Optional[str] = typer.Option(None, "--tag", help="Comma-separated tags."),
     form: Optional[str] = typer.Option(None, "--form", help="Form ID to use."),
-    content: Optional[str] = typer.Option(None, "--content", help="HTML content for the first field."),
+    content: Optional[str] = typer.Option(
+        None, "--content", help="HTML content for the first field."
+    ),
 ) -> None:
     """Create a new ELN document."""
     ctx = get_context()
@@ -62,6 +65,7 @@ def create_document(
 # ---------------------------------------------------------------------------
 # notebook + folder  (unified via helper)
 # ---------------------------------------------------------------------------
+
 
 def _create_folder_like(name: str, parent_id: Optional[str], notebook: bool) -> None:
     ctx = get_context()
@@ -100,21 +104,33 @@ def create_folder(
 # sample
 # ---------------------------------------------------------------------------
 
+
 @app.command("sample")
 def create_sample(
     name: str = typer.Option(..., "--name", "-n", help="Sample name."),
     template: Optional[str] = typer.Option(None, "--template", help="Sample template ID."),
-    quantity: Optional[float] = typer.Option(None, "--quantity", "-q", help="Total quantity value."),
+    quantity: Optional[float] = typer.Option(
+        None, "--quantity", "-q", help="Total quantity value."
+    ),
     unit: Optional[int] = typer.Option(None, "--unit", "-u", help="Unit ID (RSpace unit system)."),
-    expiry: Optional[str] = typer.Option(None, "--expiry", help="Expiry date (ISO format, e.g. 2025-12-31)."),
+    expiry: Optional[str] = typer.Option(
+        None, "--expiry", help="Expiry date (ISO format, e.g. 2025-12-31)."
+    ),
     tag: Optional[str] = typer.Option(None, "--tag", help="Comma-separated tags."),
     description: Optional[str] = typer.Option(None, "--description", "-d"),
     subsample_count: Optional[int] = typer.Option(None, "--subsample-count"),
-    from_csv: Optional[Path] = typer.Option(None, "--from-csv", help="CSV file for bulk sample creation."),
+    from_csv: Optional[Path] = typer.Option(
+        None, "--from-csv", help="CSV file for bulk sample creation."
+    ),
 ) -> None:
     """Create a new inventory sample. Use --from-csv for bulk creation."""
     ctx = get_context()
-    columns = [COL_GLOBAL_ID, COL_NAME_35, ColumnDef("quantity.numericValue", "Quantity", 10), COL_CREATED]
+    columns = [
+        COL_GLOBAL_ID,
+        COL_NAME_35,
+        ColumnDef("quantity.numericValue", "Quantity", 10),
+        COL_CREATED,
+    ]
 
     if from_csv:
         _bulk_create_from_csv(ctx, from_csv, columns)
@@ -182,6 +198,7 @@ def _bulk_create_from_csv(ctx, csv_path: Path, columns: list) -> None:
 # container
 # ---------------------------------------------------------------------------
 
+
 @app.command("container")
 def create_container(
     name: str = typer.Option(..., "--name", "-n", help="Container name."),
@@ -191,7 +208,9 @@ def create_container(
     tag: Optional[str] = typer.Option(None, "--tag", help="Comma-separated tags."),
     description: Optional[str] = typer.Option(None, "--description", "-d"),
     no_samples: bool = typer.Option(False, "--no-samples", help="Disallow storing samples."),
-    no_containers: bool = typer.Option(False, "--no-containers", help="Disallow storing containers."),
+    no_containers: bool = typer.Option(
+        False, "--no-containers", help="Disallow storing containers."
+    ),
 ) -> None:
     """Create a new inventory container (list or grid)."""
     ctx = get_context()
@@ -231,10 +250,13 @@ def create_container(
 # form
 # ---------------------------------------------------------------------------
 
+
 @app.command("form")
 def create_form(
     name: str = typer.Option(..., "--name", "-n", help="Form name."),
-    fields_file: Optional[Path] = typer.Option(None, "--fields-file", help="JSON file defining form fields."),
+    fields_file: Optional[Path] = typer.Option(
+        None, "--fields-file", help="JSON file defining form fields."
+    ),
     tag: Optional[str] = typer.Option(None, "--tag"),
     publish: bool = typer.Option(False, "--publish", help="Publish the form after creation."),
 ) -> None:
@@ -258,9 +280,12 @@ def create_form(
 # template (sample template)
 # ---------------------------------------------------------------------------
 
+
 @app.command("template")
 def create_template(
-    from_file: Path = typer.Option(..., "--from-file", help="JSON file defining the sample template."),
+    from_file: Path = typer.Option(
+        ..., "--from-file", help="JSON file defining the sample template."
+    ),
 ) -> None:
     """Create a new inventory sample template from a JSON definition file."""
     ctx = get_context()
@@ -280,6 +305,7 @@ def create_template(
 # user (sysadmin)
 # ---------------------------------------------------------------------------
 
+
 @app.command("user")
 def create_user(
     username: str = typer.Option(..., "--username"),
@@ -291,7 +317,11 @@ def create_user(
 ) -> None:
     """Create a new RSpace user (sysadmin only)."""
     ctx = get_context()
-    columns = [ColumnDef("id", "ID", 8), ColumnDef("username", "Username", 20), ColumnDef("email", "Email", 30)]
+    columns = [
+        ColumnDef("id", "ID", 8),
+        ColumnDef("username", "Username", 20),
+        ColumnDef("email", "Email", 30),
+    ]
     try:
         result = ctx.eln.retrieve_api_results(
             "/sysadmin/users",
