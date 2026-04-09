@@ -6,7 +6,7 @@ import typer
 from rich.console import Console
 
 from . import __version__
-from .config import ConfigError, load_config
+from .config import DEFAULT_PROFILE, ConfigError, load_config
 from .context import AppContext, set_context
 from .output import OutputFormat
 
@@ -79,6 +79,13 @@ def root_callback(
         help="Output format: table, json, csv, or quiet (IDs only).",
         show_default=True,
     ),
+    profile: str = typer.Option(
+        DEFAULT_PROFILE,
+        "--profile",
+        "-p",
+        help="Credential profile to use (see 'rspace configure --list').",
+        show_default=True,
+    ),
     url: Optional[str] = typer.Option(
         None,
         "--url",
@@ -117,7 +124,7 @@ def root_callback(
         return
 
     try:
-        resolved_url, resolved_key = load_config(url, api_key)
+        resolved_url, resolved_key = load_config(url, api_key, profile=profile)
     except ConfigError as e:
         console.print(f"[bold red]Configuration error:[/bold red] {e}")
         raise typer.Exit(code=1)

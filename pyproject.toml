@@ -29,6 +29,10 @@ typer = ">=0.9"
 rich = ">=13.0"
 rspace-client = ">=2.6.2"
 python-dotenv = ">=1.0"
+keyring = {version = ">=24.0", optional = true}
+
+[tool.poetry.extras]
+keychain = ["keyring"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0"
