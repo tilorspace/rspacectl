@@ -13,7 +13,8 @@ A command-line interface for [RSpace](https://www.researchspace.com/) covering b
 - **Tagging** — set tags on any resource type with a single `rspace tag` command
 - **Multiple output formats** — rich tables (default), JSON, CSV, quiet (IDs only, for piping)
 - **Pagination** — all list commands support `--page` / `--page-size` with a result footer
-- **Configurable** — credentials stored in `~/.rspacectl` or via environment variables
+- **Named profiles** — manage multiple RSpace instances with `--profile`
+- **Keychain storage** — store credentials in the OS keychain, never in a plain-text file
 
 ## Requirements
 
@@ -54,7 +55,11 @@ pip install -e .
 rspace --help
 ```
 
-This installs the package in editable mode into your current Python environment (virtualenv, conda, etc.), so changes to the source are reflected immediately without reinstalling.
+With optional keychain support:
+
+```bash
+pip install -e ".[keychain]"
+```
 
 ## Configuration
 
@@ -66,6 +71,40 @@ rspace configure
 
 Saves credentials to `~/.rspacectl` with permissions `600`.
 
+### Named profiles
+
+Manage multiple RSpace instances (e.g. production and staging) with named profiles:
+
+```bash
+rspace configure --profile staging       # saves to ~/.rspacectl.staging
+rspace --profile staging list samples   # uses staging credentials
+rspace configure --list                 # show all configured profiles
+```
+
+The default profile (`~/.rspacectl`) is used when `--profile` is omitted — fully backward compatible.
+
+### OS keychain storage
+
+For better security, store credentials in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of a plain-text file. Requires the optional `keyring` dependency:
+
+```bash
+pip install -e ".[keychain]"        # or: poetry install -E keychain
+
+rspace configure --keychain         # store default profile in keychain
+rspace configure --profile prod --keychain   # named profile in keychain
+```
+
+Credentials stored in the keychain never appear in files, environment variables, or process arguments — recommended for agentic and CI use.
+
+### Credential resolution order
+
+For every invocation, credentials are resolved in this order (first match wins):
+
+1. `--url` / `--api-key` CLI flags
+2. `RSPACE_URL` / `RSPACE_API_KEY` environment variables
+3. OS keychain
+4. Profile dotenv file (`~/.rspacectl` or `~/.rspacectl.<profile>`)
+
 ### Manual config file
 
 Create `~/.rspacectl`:
@@ -75,20 +114,13 @@ RSPACE_URL=https://your-rspace-instance.com
 RSPACE_API_KEY=your-api-key-here
 ```
 
-### Environment variables
-
-```bash
-export RSPACE_URL=https://your-rspace-instance.com
-export RSPACE_API_KEY=your-api-key-here
-```
-
-Environment variables take precedence over the config file. Per-invocation overrides are also available via `--url` and `--api-key` flags.
-
 ### Verify connection
 
 ```bash
 rspace status
 ```
+
+---
 
 ## Usage
 
@@ -98,10 +130,10 @@ Every command accepts `-o` / `--output`:
 
 | Format | Flag | Description |
 |--------|------|-------------|
-| Table | `-o table` | Rich formatted table (default) |
-| JSON | `-o json` | Pretty-printed JSON |
-| CSV | `-o csv` | RFC 4180 CSV to stdout |
-| Quiet | `-o quiet` | IDs only, one per line — useful for piping |
+| Table  | `-o table`  | Rich formatted table (default) |
+| JSON   | `-o json`   | Pretty-printed JSON |
+| CSV    | `-o csv`    | RFC 4180 CSV to stdout |
+| Quiet  | `-o quiet`  | IDs only, one per line — useful for piping |
 
 ```bash
 # Pipe document IDs into another command
@@ -129,7 +161,7 @@ rspace list files --type document
 
 rspace list forms
 rspace list groups
-rspace list users                        # sysadmin only
+rspace list users                          # sysadmin only
 rspace list activity --from 2024-01-01 --to 2024-03-31 --action CREATE
 rspace list workbenches
 ```
@@ -153,9 +185,10 @@ rspace get FL789          # folder
 rspace get SA101          # sample
 rspace get SS202          # subsample
 rspace get IC303          # container
-rspace get IT404          # sample template
-rspace get FM505          # form
-rspace get GL606          # gallery file
+rspace get BE404          # workbench
+rspace get IT505          # sample template
+rspace get FM606          # form
+rspace get GL707          # gallery file
 ```
 
 For plain numeric IDs, provide the type explicitly:
@@ -168,11 +201,11 @@ rspace get sample   456
 Additional flags for richer output:
 
 ```bash
-rspace get SA101 --subsamples     # sample + subsample list
-rspace get IC303 --content        # container + contents
-rspace get BE404 --content        # workbench + contents
-rspace get NB456 --content        # notebook + document list
-rspace get FL789 --content        # folder + document list
+rspace get SA101 --subsamples     # sample detail + subsample list
+rspace get IC303 --content        # container detail + contents
+rspace get BE404 --content        # workbench detail + contents
+rspace get NB456 --content        # notebook detail + document list
+rspace get FL789 --content        # folder detail + document list
 ```
 
 ---
@@ -191,7 +224,7 @@ rspace create container --name "Freezer 1" --type list
 rspace create container --name "Box A"     --type grid --rows 9 --cols 9
 
 rspace create user --username jdoe --email j.doe@example.com \
-    --first-name Jane --last-name Doe --password secret   # sysadmin only
+    --first-name Jane --last-name Doe        # sysadmin only; prompts for password
 ```
 
 ---
@@ -203,9 +236,16 @@ rspace update document SD123 --name "Revised Experiment"
 rspace update document SD123 --tag "lab,2024,validated"
 rspace update document SD123 --append "<p>Additional notes</p>"
 
+# Target a specific form field
+rspace update document SD123 --content "<p>New text</p>" --field-id 456
+rspace update document SD123 --append "<p>Addendum</p>" --field-index 2
+
 rspace update sample SA456 --name "Buffer A v2" --description "pH 7.4"
 rspace update sample SA456 --tag "reagent,validated"
 ```
+
+`--field-id` targets a field by its numeric ID (use `rspace get SD123 -o json` to find IDs).
+`--field-index` targets a field by 0-based position (for `--append` / `--prepend`).
 
 ---
 
@@ -220,7 +260,7 @@ rspace tag IC202 "freezer,-80C"
 rspace tag IT303 "template,approved"
 ```
 
-Tags replace all existing tags on the resource. Use a GlobalID so the type is inferred automatically.
+Accepts any GlobalID — the resource type is inferred from the prefix. Replaces all existing tags.
 
 ---
 
@@ -228,7 +268,7 @@ Tags replace all existing tags on the resource. Use a GlobalID so the type is in
 
 ```bash
 rspace delete document SD123 SD456 SD789   # batch delete
-rspace delete sample   SA101
+rspace delete sample    SA101
 rspace delete subsample SS202 SS203
 rspace delete container IC303
 ```
@@ -273,7 +313,7 @@ rspace upload attachment ./spec.pdf SS101
 # Download a gallery file
 rspace download file GL606 --output-dir ./downloads
 
-# Download a document attachment
+# Download an inventory attachment
 rspace download attachment GL707 --output-dir ./downloads
 ```
 
@@ -282,8 +322,8 @@ rspace download attachment GL707 --output-dir ./downloads
 ### `split` — split a subsample
 
 ```bash
-rspace split SS202 --count 4             # split into 4 equal parts
-rspace split SS202 --count 4 --target IC303   # split and place in container
+rspace split SS202 --count 4                      # split into 4 equal parts
+rspace split SS202 --count 4 --target IC303       # split and place in container
 ```
 
 ---
@@ -309,25 +349,28 @@ rspace export --format xml  --scope user --no-wait   # start job, don't wait
 ### `import` — import data
 
 ```bash
-rspace import eln ./archive.zip
+rspace import word  report.docx notes.docx --folder FL123
+rspace import tree  ./my-lab-data --folder FL123
 ```
 
 ---
 
 ## GlobalID prefixes
 
-| Prefix | Resource type |
-|--------|--------------|
-| `SD`   | Document |
-| `NB`   | Notebook |
-| `FL`   | Folder |
-| `SA`   | Sample |
-| `SS`   | Subsample |
-| `IC`   | Container |
+| Prefix | Resource type   |
+|--------|-----------------|
+| `SD`   | Document        |
+| `NB`   | Notebook        |
+| `FL`   | Folder          |
+| `SA`   | Sample          |
+| `SS`   | Subsample       |
+| `IC`   | Container       |
 | `IT`   | Sample template |
-| `FM`   | Form |
-| `GL`   | Gallery file |
-| `BE`   | Workbench |
+| `FM`   | Form            |
+| `GL`   | Gallery file    |
+| `BE`   | Workbench       |
+
+---
 
 ## Development
 
@@ -335,11 +378,17 @@ rspace import eln ./archive.zip
 # Install with dev dependencies
 poetry install
 
+# With optional keychain support
+poetry install -E keychain
+
 # Run tests
 poetry run pytest
 
 # Format and lint
 poetry run black rspacectl tests
+poetry run ruff check rspacectl tests
 ```
 
+## License
 
+Apache 2.0 — see [LICENSE](LICENSE).
