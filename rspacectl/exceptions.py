@@ -3,6 +3,7 @@
 from typing import NoReturn
 
 import typer
+from rich.markup import escape
 from rspace_client.client_base import ClientBase
 
 from .output import err_console as error_console
@@ -10,7 +11,7 @@ from .output import err_console as error_console
 
 def exit_with_error(message: str, code: int = 1) -> NoReturn:
     """Print an error message to stderr and exit with the given code."""
-    error_console.print(f"[bold red]Error:[/bold red] {message}")
+    error_console.print(f"[bold red]Error:[/bold red] {escape(message)}")
     raise typer.Exit(code=code)
 
 

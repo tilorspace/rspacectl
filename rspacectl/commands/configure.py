@@ -99,7 +99,8 @@ def _cmd_interactive(profile: str, use_keychain: bool) -> None:
     try:
         save_config(url, api_key, profile=profile, use_keychain=use_keychain)
     except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        from rich.markup import escape
+        console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
         raise typer.Exit(1)
 
     if use_keychain:
