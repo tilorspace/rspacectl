@@ -217,7 +217,13 @@ rspace create document --name "My Experiment" --form FM123
 rspace create notebook --name "Project Alpha"
 rspace create folder   --name "Data" --parent FL456
 
-rspace create sample --name "Buffer A" --template IT101
+rspace create sample --name "Buffer A"
+rspace create sample --name "Buffer A" --template IT101   # use a template
+
+# populate template fields (use `rspace get template IT101` to see field names)
+rspace create sample --name "Enzyme X" --template IT101 \
+    --field "pH=7.4" --field "Source=Commercial"
+
 rspace create sample --from-csv samples.csv   # bulk create from CSV
 
 rspace create container --name "Freezer 1" --type list
