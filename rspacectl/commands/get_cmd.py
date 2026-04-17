@@ -18,6 +18,7 @@ The resource type can be given explicitly or inferred from a GlobalID prefix:
 from typing import Optional
 
 import typer
+from rich.table import Table
 
 from ..context import get_context
 from ..exceptions import handle_api_error
@@ -158,6 +159,34 @@ def _get_form(id: str) -> None:
     print_single(result, ctx.output, columns)
 
 
+def _print_template_fields(fields: list) -> None:
+    """Print a summary table of template field definitions."""
+    if not fields:
+        return
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("Field Name", min_width=20)
+    table.add_column("Type", min_width=10)
+    table.add_column("Mandatory", min_width=9)
+    table.add_column("Options / Default", min_width=20)
+
+    for f in fields:
+        name = f.get("name", "")
+        ftype = f.get("type", "")
+        mandatory = "[red]yes[/red]" if f.get("mandatory") else "no"
+        options = ""
+        defn = f.get("definition") or {}
+        if "options" in defn:
+            options = ", ".join(defn["options"])
+        elif "options" in f:
+            options = ", ".join(f["options"])
+        elif f.get("defaultValue") is not None:
+            options = f"default: {f['defaultValue']}"
+        table.add_row(name, ftype, mandatory, options)
+
+    console.print("\n[bold]Template Fields:[/bold]")
+    console.print(table)
+
+
 def _get_template(id: str) -> None:
     ctx = get_context()
     columns = [
@@ -173,6 +202,8 @@ def _get_template(id: str) -> None:
     except Exception as e:
         handle_api_error(e)
     print_single(result, ctx.output, columns)
+    if ctx.output == OutputFormat.TABLE:
+        _print_template_fields(result.get("fields", []))
 
 
 def _get_file(id: str) -> None:

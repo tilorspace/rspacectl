@@ -105,10 +105,62 @@ def create_folder(
 # ---------------------------------------------------------------------------
 
 
+def _parse_fields(field_args: List[str]) -> dict:
+    """Parse a list of 'NAME=VALUE' strings into a {name: value} dict."""
+    parsed = {}
+    for arg in field_args:
+        if "=" not in arg:
+            err_console.print(f"[red]Invalid --field format (expected NAME=VALUE):[/red] {arg}")
+            raise typer.Exit(1)
+        name, _, value = arg.partition("=")
+        parsed[name.strip()] = value.strip()
+    return parsed
+
+
+def _build_fields_post(template_fields: list, field_values: dict) -> list:
+    """
+    Build the fields list for create_sample POST.
+    Matches supplied name→value pairs against the template's field order,
+    inserting empty dicts for unprovided fields to preserve positional ordering.
+    """
+    posts = []
+    for f in template_fields:
+        fname = f.get("name", "")
+        ftype = f.get("type", "").lower()
+        value = field_values.get(fname)
+        if value is None:
+            posts.append({})
+            continue
+        if ftype == "choice":
+            posts.append({"selectedOptions": [v.strip() for v in value.split(",")]})
+        elif ftype == "radio":
+            posts.append({"selectedOptions": [value]})
+        else:
+            posts.append({"content": value})
+    return posts
+
+
+def _validate_mandatory_fields(template_fields: list, field_values: dict) -> None:
+    """Fail fast if any mandatory template fields are missing from field_values."""
+    missing = [
+        f["name"]
+        for f in template_fields
+        if f.get("mandatory") and f.get("name") not in field_values
+    ]
+    if missing:
+        err_console.print("[red]Missing mandatory template fields:[/red]")
+        for m in missing:
+            err_console.print(f"  --field \"{m}=<value>\"")
+        raise typer.Exit(1)
+
+
 @app.command("sample")
 def create_sample(
     name: str = typer.Option(..., "--name", "-n", help="Sample name."),
     template: Optional[str] = typer.Option(None, "--template", help="Sample template ID."),
+    field: Optional[List[str]] = typer.Option(
+        None, "--field", help="Template field value as NAME=VALUE. Repeatable."
+    ),
     quantity: Optional[float] = typer.Option(
         None, "--quantity", "-q", help="Total quantity value."
     ),
@@ -123,7 +175,13 @@ def create_sample(
         None, "--from-csv", help="CSV file for bulk sample creation."
     ),
 ) -> None:
-    """Create a new inventory sample. Use --from-csv for bulk creation."""
+    """Create a new inventory sample. Use --from-csv for bulk creation.
+
+    To populate template fields use --field repeatedly:
+
+      rspace create sample --name X --template IT123 \\
+        --field "pH=7.4" --field "Source=Commercial"
+    """
     ctx = get_context()
     columns = [
         COL_GLOBAL_ID,
@@ -135,6 +193,19 @@ def create_sample(
     if from_csv:
         _bulk_create_from_csv(ctx, from_csv, columns)
         return
+
+    field_values = _parse_fields(field or [])
+
+    template_fields = []
+    if template:
+        try:
+            tmpl = ctx.inv.get_sample_template_by_id(parse_id(template))
+            template_fields = tmpl.get("fields", [])
+        except Exception as e:
+            handle_api_error(e)
+        _validate_mandatory_fields(template_fields, field_values)
+
+    fields_post = _build_fields_post(template_fields, field_values) if template_fields else None
 
     try:
         total_quantity = (
@@ -152,6 +223,7 @@ def create_sample(
             total_quantity=total_quantity,
             expiry_date=expiry_dt,
             subsample_count=subsample_count,
+            fields=fields_post,
         )
     except Exception as e:
         handle_api_error(e)
