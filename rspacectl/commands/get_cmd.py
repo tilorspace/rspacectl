@@ -176,9 +176,9 @@ def _print_template_fields(fields: list) -> None:
         options = ""
         defn = f.get("definition") or {}
         if "options" in defn:
-            options = ", ".join(defn["options"])
+            options = ", ".join(str(o) for o in defn["options"])
         elif "options" in f:
-            options = ", ".join(f["options"])
+            options = ", ".join(str(o) for o in f["options"])
         elif f.get("defaultValue") is not None:
             options = f"default: {f['defaultValue']}"
         table.add_row(name, ftype, mandatory, options)
@@ -201,6 +201,7 @@ def _get_template(id: str) -> None:
         result = ctx.inv.get_sample_template_by_id(parse_id(id))
     except Exception as e:
         handle_api_error(e)
+        return  # handle_api_error always exits, but be explicit
     print_single(result, ctx.output, columns)
     if ctx.output == OutputFormat.TABLE:
         _print_template_fields(result.get("fields", []))

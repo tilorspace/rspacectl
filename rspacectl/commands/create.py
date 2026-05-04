@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import List, Optional
 
 import typer
+from rich.markup import escape
 from rspace_client.inv.inv import Quantity, SamplePost
 from rspace_client.inv.inv import Tag as InvTag
 
 from ..context import get_context
-from ..exceptions import handle_api_error
+from ..exceptions import handle_api_error, warn
 from ..ids import parse_id
 from ..output import (
     COL_CREATED,
@@ -110,7 +111,7 @@ def _parse_fields(field_args: List[str]) -> dict:
     parsed = {}
     for arg in field_args:
         if "=" not in arg:
-            err_console.print(f"[red]Invalid --field format (expected NAME=VALUE):[/red] {arg}")
+            err_console.print(f"[red]Invalid --field format (expected NAME=VALUE):[/red] {escape(arg)}")
             raise typer.Exit(1)
         name, _, value = arg.partition("=")
         parsed[name.strip()] = value.strip()
@@ -141,7 +142,13 @@ def _build_fields_post(template_fields: list, field_values: dict) -> list:
 
 
 def _validate_mandatory_fields(template_fields: list, field_values: dict) -> None:
-    """Fail fast if any mandatory template fields are missing from field_values."""
+    """Fail fast if any mandatory template fields are missing from field_values.
+    Also warn about any supplied field names not found in the template."""
+    known = {f.get("name") for f in template_fields}
+    unknown = [k for k in field_values if k not in known]
+    for u in unknown:
+        warn(f"Unknown field name ignored: '{escape(u)}' (use 'rspace get template' to see valid names)")
+
     missing = [
         f["name"]
         for f in template_fields
@@ -150,7 +157,7 @@ def _validate_mandatory_fields(template_fields: list, field_values: dict) -> Non
     if missing:
         err_console.print("[red]Missing mandatory template fields:[/red]")
         for m in missing:
-            err_console.print(f"  --field \"{m}=<value>\"")
+            err_console.print(f"  --field \"{escape(m)}=<value>\"")
         raise typer.Exit(1)
 
 
@@ -203,6 +210,7 @@ def create_sample(
             template_fields = tmpl.get("fields", [])
         except Exception as e:
             handle_api_error(e)
+            return  # handle_api_error always exits, but be explicit
         _validate_mandatory_fields(template_fields, field_values)
 
     fields_post = _build_fields_post(template_fields, field_values) if template_fields else None
@@ -227,6 +235,7 @@ def create_sample(
         )
     except Exception as e:
         handle_api_error(e)
+        return  # handle_api_error always exits, but be explicit
 
     console.print(f"[green]Created sample[/green] {result.get('globalId')}")
     print_single(result, ctx.output, columns)
