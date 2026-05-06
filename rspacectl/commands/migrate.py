@@ -181,6 +181,7 @@ def _walk_container(
     parent_global_id: Optional[str],
     parent_grid_col: Optional[int] = None,
     parent_grid_row: Optional[int] = None,
+    found_sample_ids: Optional[Set[int]] = None,
 ) -> List[Dict]:
     """Recursively fetch a container and all its child containers.
 
@@ -190,6 +191,10 @@ def _walk_container(
     ``parent_grid_col``/``parent_grid_row`` record where this container sits
     inside its parent if the parent is a GRID container; both are ``None`` for
     LIST parents.
+
+    If ``found_sample_ids`` is a set, parent sample IDs of any subsamples
+    encountered in the location contents will be added to it so the caller
+    can auto-include those samples in the export.
     """
     full = inv.get_container_by_id(stub["id"], include_content=True)
     full["_migration"] = {
@@ -206,8 +211,15 @@ def _walk_container(
 
     for loc in full.get("locations", []):
         item = loc.get("content") or {}
-        if item.get("type") == "CONTAINER" or item.get("globalId", "").startswith("IC"):
+        gid = item.get("globalId", "")
+        if item.get("type") == "CONTAINER" or gid.startswith("IC"):
             children_with_pos.append((item, loc.get("coordX"), loc.get("coordY")))
+        elif gid.startswith("SS") and found_sample_ids is not None:
+            # Subsample stub — record the parent sample ID for auto-inclusion
+            sample_ref = item.get("sample") or {}
+            parent_sample_id = sample_ref.get("id")
+            if parent_sample_id:
+                found_sample_ids.add(parent_sample_id)
 
     if not children_with_pos:
         for item in (full.get("storedContainers") or []):
@@ -227,14 +239,23 @@ def _walk_container(
                 inv, child, depth + 1, full["globalId"],
                 parent_grid_col=col if is_grid else None,
                 parent_grid_row=row if is_grid else None,
+                found_sample_ids=found_sample_ids,
             )
         )
 
     return collected
 
 
-def _export_containers(inv, ids: Optional[List[int]] = None) -> List[Dict]:
-    """Walk the container tree from all (or selected) roots."""
+def _export_containers(
+    inv, ids: Optional[List[int]] = None
+) -> Tuple[List[Dict], Set[int]]:
+    """Walk the container tree from all (or selected) roots.
+
+    Returns ``(containers, found_sample_ids)`` where ``found_sample_ids`` is
+    the set of numeric sample IDs whose subsamples were found inside the walked
+    containers.  When ``ids`` is ``None`` (export-all) samples are handled
+    separately, so the set will be empty.
+    """
     if ids:
         roots = [inv.get_container_by_id(cid) for cid in ids]
     else:
@@ -242,10 +263,18 @@ def _export_containers(inv, ids: Optional[List[int]] = None) -> List[Dict]:
         roots = _paginate(inv.list_top_level_containers, "containers")
 
     containers: List[Dict] = []
+    found_sample_ids: Set[int] = set()
+    # Only auto-collect sample IDs when exporting specific containers
+    collect_samples = ids is not None
     for root in roots:
         err_console.print(f"  Walking tree from {root.get('globalId')} ({root.get('name')})…")
-        containers.extend(_walk_container(inv, root, depth=0, parent_global_id=None))
-    return containers
+        containers.extend(
+            _walk_container(
+                inv, root, depth=0, parent_global_id=None,
+                found_sample_ids=found_sample_ids if collect_samples else None,
+            )
+        )
+    return containers, found_sample_ids
 
 
 def _collect_subsample_locations(sample: Dict) -> List[Dict]:
@@ -746,6 +775,7 @@ def migrate_export(
         console.print(f"  Collected [green]{len(blob['templates'])}[/green] template(s).")
 
     # ---- Containers ------------------------------------------------------
+    container_found_sample_ids: Set[int] = set()
     if all_resources or container_ids:
         c_ids = (
             [parse_id(c) for c in container_ids]
@@ -754,20 +784,38 @@ def migrate_export(
         )
         err_console.print("[bold]Exporting containers…[/bold]")
         try:
-            blob["containers"] = _export_containers(inv, ids=c_ids)
+            blob["containers"], container_found_sample_ids = _export_containers(inv, ids=c_ids)
         except Exception as exc:
             err_console.print(f"[red]Export failed (containers): {exc}[/red]")
             raise typer.Exit(1)
         console.print(f"  Collected [green]{len(blob['containers'])}[/green] container(s).")
+        if container_found_sample_ids:
+            err_console.print(
+                f"  Found [green]{len(container_found_sample_ids)}[/green] sample(s)"
+                " referenced by subsamples inside the walked containers."
+            )
 
     # ---- Samples ---------------------------------------------------------
-    if all_resources or sample_ids:
+    # Include explicitly requested samples, plus any discovered via container walk
+    effective_sample_ids: Optional[List[str]] = sample_ids
+    if container_found_sample_ids and not all_resources:
+        # Merge container-discovered sample IDs with any explicitly passed ones
+        explicit_numeric = {parse_id(s) for s in (sample_ids or [])}
+        all_numeric = container_found_sample_ids | explicit_numeric
+        effective_sample_ids = [str(sid) for sid in all_numeric]
+        if not sample_ids:
+            err_console.print(
+                "[bold]Exporting samples found in containers…[/bold]"
+            )
+
+    if all_resources or effective_sample_ids:
         s_ids = (
-            [parse_id(s) for s in sample_ids]
-            if sample_ids and not all_resources
+            [parse_id(s) for s in effective_sample_ids]
+            if effective_sample_ids and not all_resources
             else None
         )
-        err_console.print("[bold]Exporting samples…[/bold]")
+        if not container_found_sample_ids or sample_ids:
+            err_console.print("[bold]Exporting samples…[/bold]")
         try:
             samples, ref_tmpl_gids = _export_samples(inv, ids=s_ids)
             blob["samples"] = samples
