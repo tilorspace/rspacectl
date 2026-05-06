@@ -218,11 +218,15 @@ def _walk_container(
             if item.get("globalId", "").startswith("IC"):
                 children_with_pos.append((item, None, None))
 
+    # Only pass grid coords when THIS container is a GRID — for LIST containers
+    # the coordX/Y values are sequential slot IDs, not meaningful grid positions.
+    is_grid = full.get("cType") == "GRID"
     for child, col, row in children_with_pos:
         collected.extend(
             _walk_container(
                 inv, child, depth + 1, full["globalId"],
-                parent_grid_col=col, parent_grid_row=row,
+                parent_grid_col=col if is_grid else None,
+                parent_grid_row=row if is_grid else None,
             )
         )
 
