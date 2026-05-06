@@ -319,9 +319,16 @@ def _export_samples(
     for stub in stubs:
         full = inv.get_sample_by_id(stub["id"])
 
-        # Collect referenced template global ID for auto-inclusion
+        # Collect referenced template global ID for auto-inclusion.
+        # The API may return the template reference as sampleTemplate.globalId,
+        # templateGlobalId, or just a numeric templateId — handle all three.
         tmpl_ref = full.get("sampleTemplate") or {}
-        tmpl_gid = tmpl_ref.get("globalId") or full.get("templateGlobalId")
+        tmpl_gid = (
+            tmpl_ref.get("globalId")
+            or full.get("templateGlobalId")
+        )
+        if not tmpl_gid and full.get("templateId"):
+            tmpl_gid = f"IT{full['templateId']}"
         if tmpl_gid:
             ref_template_gids.add(tmpl_gid)
 
@@ -543,9 +550,15 @@ def _import_samples(inv, samples: List[Dict], state: _ImportState, dry_run: bool
         old_subsamples = sample.get("subSamples", [])
         old_fields = sample.get("fields", [])
 
-        # Resolve template
+        # Resolve template — handle sampleTemplate.globalId, templateGlobalId,
+        # or bare numeric templateId (as produced by the current API).
         tmpl_ref = sample.get("sampleTemplate") or {}
-        old_tmpl_gid = tmpl_ref.get("globalId") or sample.get("templateGlobalId")
+        old_tmpl_gid = (
+            tmpl_ref.get("globalId")
+            or sample.get("templateGlobalId")
+        )
+        if not old_tmpl_gid and sample.get("templateId"):
+            old_tmpl_gid = f"IT{sample['templateId']}"
         new_tmpl_id = None
         if old_tmpl_gid:
             new_tmpl_gid = state.id_map.get(old_tmpl_gid)
