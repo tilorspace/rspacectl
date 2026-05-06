@@ -179,30 +179,52 @@ def _walk_container(
     stub: Dict,
     depth: int,
     parent_global_id: Optional[str],
+    parent_grid_col: Optional[int] = None,
+    parent_grid_row: Optional[int] = None,
 ) -> List[Dict]:
     """Recursively fetch a container and all its child containers.
 
     Each record is annotated with ``_migration`` metadata so the importer can
     recreate the hierarchy without making additional API calls.
+
+    ``parent_grid_col``/``parent_grid_row`` record where this container sits
+    inside its parent if the parent is a GRID container; both are ``None`` for
+    LIST parents.
     """
     full = inv.get_container_by_id(stub["id"], include_content=True)
     full["_migration"] = {
         "depth": depth,
         "parent_global_id": parent_global_id,
+        "parent_grid_col": parent_grid_col,
+        "parent_grid_row": parent_grid_row,
     }
     collected = [full]
 
-    # Child containers may live in different response keys depending on API version
-    children: List[Dict] = full.get("storedContainers") or []
-    if not children:
-        # Fallback: generic content list — filter to containers by globalId prefix
-        for item in (full.get("content") or {}).get("content", []):
-            gid = item.get("globalId", "")
-            if gid.startswith("IC"):
-                children.append(item)
+    # The API returns child items in locations[*].content (coordX/Y give grid pos).
+    # storedContainers / content.content are kept as fallbacks for older API versions.
+    children_with_pos: List[Tuple[Dict, Optional[int], Optional[int]]] = []
 
-    for child in children:
-        collected.extend(_walk_container(inv, child, depth + 1, full["globalId"]))
+    for loc in full.get("locations", []):
+        item = loc.get("content") or {}
+        if item.get("type") == "CONTAINER" or item.get("globalId", "").startswith("IC"):
+            children_with_pos.append((item, loc.get("coordX"), loc.get("coordY")))
+
+    if not children_with_pos:
+        for item in (full.get("storedContainers") or []):
+            children_with_pos.append((item, None, None))
+
+    if not children_with_pos:
+        for item in (full.get("content") or {}).get("content", []):
+            if item.get("globalId", "").startswith("IC"):
+                children_with_pos.append((item, None, None))
+
+    for child, col, row in children_with_pos:
+        collected.extend(
+            _walk_container(
+                inv, child, depth + 1, full["globalId"],
+                parent_grid_col=col, parent_grid_row=row,
+            )
+        )
 
     return collected
 
@@ -422,7 +444,23 @@ def _import_container_hierarchy(
             continue
 
         try:
-            inv.add_items_to_list_container(parse_id(new_parent_gid), parse_id(new_gid))
+            migration = c.get("_migration", {})
+            col = migration.get("parent_grid_col")
+            row = migration.get("parent_grid_row")
+            new_c_id = parse_id(new_gid)
+            new_parent_id = parse_id(new_parent_gid)
+
+            if col is not None and row is not None:
+                from rspace_client.inv.inv import ByLocation, GridLocation
+
+                placement = ByLocation(new_c_id, locations=[GridLocation(x=col, y=row)])
+                inv.add_items_to_grid_container(
+                    target_container_id=new_parent_id,
+                    grid_placement=placement,
+                )
+            else:
+                inv.add_items_to_list_container(new_parent_id, new_c_id)
+
             console.print(
                 f"  [green]✓[/green]  [cyan]{new_gid}[/cyan] → [cyan]{new_parent_gid}[/cyan]"
             )
