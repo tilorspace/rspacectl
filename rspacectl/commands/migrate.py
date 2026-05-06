@@ -367,6 +367,12 @@ def _import_templates(inv, templates: List[Dict], state: _ImportState, dry_run: 
 
         if dry_run:
             console.print(f"  [dim]DRY RUN[/dim]  would create template: {tmpl['name']!r}")
+            # Use identity mapping so downstream dry-run phases can resolve IDs
+            state.id_map[old_gid] = old_gid
+            state.numeric_map[tmpl["id"]] = tmpl["id"]
+            for old_f in old_fields:
+                if old_f.get("globalId"):
+                    state.id_map[old_f["globalId"]] = str(old_f["id"])
             continue
 
         try:
@@ -405,6 +411,9 @@ def _import_containers_flat(
                 f"  [dim]DRY RUN[/dim]  would create container: "
                 f"{c['name']!r} ({c.get('cType', 'LIST')})"
             )
+            # Use identity mapping so Phase 3 hierarchy restore can resolve IDs
+            state.id_map[old_gid] = old_gid
+            state.numeric_map[c["id"]] = c["id"]
             continue
 
         try:
@@ -477,9 +486,13 @@ def _import_container_hierarchy(
             continue
 
         if dry_run:
+            migration = c.get("_migration", {})
+            col = migration.get("parent_grid_col")
+            row = migration.get("parent_grid_row")
+            placement_note = f" at grid ({col},{row})" if col is not None and row is not None else ""
             console.print(
-                f"  [dim]DRY RUN[/dim]  would move [cyan]{new_gid}[/cyan]"
-                f" → [cyan]{new_parent_gid}[/cyan]"
+                f"  [dim]DRY RUN[/dim]  would nest [cyan]{new_gid}[/cyan]"
+                f" → [cyan]{new_parent_gid}[/cyan]{placement_note}"
             )
             continue
 
@@ -572,6 +585,12 @@ def _import_samples(inv, samples: List[Dict], state: _ImportState, dry_run: bool
                 f"  [dim]DRY RUN[/dim]  would create sample: {sample['name']!r}"
                 f" ({len(old_subsamples)} subsample(s))"
             )
+            # Use identity mapping so Phase 5 placements can resolve IDs
+            state.id_map[old_sa_gid] = old_sa_gid
+            state.numeric_map[sample["id"]] = sample["id"]
+            for old_ss in old_subsamples:
+                state.id_map[old_ss["globalId"]] = old_ss["globalId"]
+                state.numeric_map[old_ss["id"]] = old_ss["id"]
             continue
 
         try:
@@ -655,9 +674,18 @@ def _import_subsample_placements(
         f"\n[bold]Phase 5[/bold] — placing {len(placements)} subsample(s) into containers…"
     )
 
+    workbench_skipped: List[str] = []
+
     for loc in placements:
         old_ss_gid = loc["subsample_global_id"]
         old_c_gid = loc["container_global_id"]
+
+        # Workbench containers (BE-prefix) are per-user and can't be migrated —
+        # collect them for a single summary warning rather than per-item errors.
+        if old_c_gid and old_c_gid.startswith("BE"):
+            workbench_skipped.append(old_ss_gid)
+            continue
+
         new_ss_gid = state.id_map.get(old_ss_gid)
         new_c_gid = state.id_map.get(old_c_gid)
 
@@ -698,6 +726,13 @@ def _import_subsample_placements(
             )
         except Exception as exc:
             _record_error(state, f"Subsample placement {old_ss_gid} → {old_c_gid}: {exc}")
+
+    if workbench_skipped:
+        warn(
+            f"{len(workbench_skipped)} subsample(s) were in workbench containers (BE-prefix) "
+            "on the source server — workbenches are personal and cannot be migrated. "
+            "These subsamples will remain unplaced after import."
+        )
 
 
 def _record_error(state: _ImportState, message: str) -> None:
