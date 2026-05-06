@@ -29,6 +29,7 @@ from .commands import (
     share,
     export,
     import_cmd,
+    migrate,
     tag,
 )
 
@@ -53,6 +54,7 @@ app.add_typer(delete.app, name="delete", help="Delete one or more resources")
 app.add_typer(upload.app, name="upload", help="Upload files or attachments")
 app.add_typer(download.app, name="download", help="Download files or attachments")
 app.add_typer(import_cmd.app, name="import", help="Import data into RSpace")
+app.add_typer(migrate.app, name="migrate", help="Export/import full inventory snapshots for server migration")
 
 app.command("configure")(configure.configure)
 app.command("status")(status.status)

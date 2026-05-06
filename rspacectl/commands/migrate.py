@@ -1,0 +1,913 @@
+"""rspace migrate — export/import complete inventory snapshots for server-to-server migration.
+
+Workflow
+--------
+Export (source server):
+
+    rspace migrate export --all --output snapshot.json
+    rspace migrate export --template IT1 --sample SA2 --output partial.json
+
+Import (target server, different --profile):
+
+    rspace --profile target migrate import snapshot.json
+    rspace --profile target migrate import snapshot.json --dry-run
+    rspace --profile target migrate import snapshot.json --checkpoint snapshot.json.checkpoint
+
+Import algorithm (five phases)
+-------------------------------
+1. Templates   — create flat; record old→new globalId + per-field id mapping
+2. Containers (flat) — create all containers at top level; record old→new globalId
+3. Container hierarchy — move containers into their parents, shallowest depth first
+4. Samples     — create from mapped template; name-match field values; update subsample names/quantities
+5. Subsample placements — move each subsample into its recorded container (exact grid position preserved)
+
+A checkpoint file (<snapshot>.checkpoint) is written after each phase so an
+interrupted import can resume with --checkpoint without duplicating data.
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+import typer
+from rspace_client.inv.inv import Pagination
+
+from ..context import get_context
+from ..exceptions import warn
+from ..ids import parse_id
+from ..output import console, err_console
+
+app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+
+SCHEMA_VERSION = 1
+_CHECKPOINT_SUFFIX = ".checkpoint"
+
+# Keys that are server-generated and must be stripped before re-posting
+_RESOURCE_SERVER_KEYS: frozenset = frozenset(
+    {
+        "id",
+        "globalId",
+        "created",
+        "lastModified",
+        "createdBy",
+        "modifiedBy",
+        "owner",
+        "version",
+        "historicalVersion",
+        "links",
+        "iconId",
+        "permittedActions",
+        "sharedWith",
+    }
+)
+_FIELD_SERVER_KEYS: frozenset = frozenset({"id", "globalId", "created", "lastModified", "links"})
+
+
+# ---------------------------------------------------------------------------
+# Import state / checkpoint
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ImportState:
+    """Accumulated id mappings and progress, persisted as the checkpoint file."""
+
+    id_map: Dict[str, str] = field(default_factory=dict)
+    """old globalId → new globalId for every successfully created resource."""
+
+    numeric_map: Dict[int, int] = field(default_factory=dict)
+    """old numeric id → new numeric id (useful for SDK calls that need ints)."""
+
+    completed_phases: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict:
+        return {
+            "id_map": self.id_map,
+            "numeric_map": {str(k): v for k, v in self.numeric_map.items()},
+            "completed_phases": self.completed_phases,
+            "errors": self.errors,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict) -> "_ImportState":
+        s = cls()
+        s.id_map = d.get("id_map", {})
+        s.numeric_map = {int(k): v for k, v in d.get("numeric_map", {}).items()}
+        s.completed_phases = d.get("completed_phases", [])
+        s.errors = d.get("errors", [])
+        return s
+
+
+def _save_checkpoint(path: Path, state: _ImportState) -> None:
+    path.write_text(json.dumps(state.to_dict(), indent=2))
+    err_console.print(f"[dim]Checkpoint saved → {path}[/dim]")
+
+
+def _load_checkpoint(path: Path) -> _ImportState:
+    return _ImportState.from_dict(json.loads(path.read_text()))
+
+
+# ---------------------------------------------------------------------------
+# Pagination helper
+# ---------------------------------------------------------------------------
+
+
+def _paginate(fetch_fn, data_key: str, page_size: int = 50, **kwargs) -> List[Dict]:
+    """Exhaust all pages of a paginated inventory endpoint and return all records."""
+    results: List[Dict] = []
+    page = 0
+    while True:
+        pagination = Pagination(page_number=page, page_size=page_size)
+        resp = fetch_fn(pagination=pagination, **kwargs)
+        batch = resp.get(data_key, [])
+        results.extend(batch)
+        total = resp.get("totalHits", len(results))
+        if len(results) >= total or not batch:
+            break
+        page += 1
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Sanitisation helpers
+# ---------------------------------------------------------------------------
+
+
+def _strip(d: Dict, keys: frozenset) -> Dict:
+    return {k: v for k, v in d.items() if k not in keys}
+
+
+def _sanitise_template(tmpl: Dict) -> Dict:
+    """Return a POST-ready template payload stripped of server-generated keys."""
+    clean = _strip(tmpl, _RESOURCE_SERVER_KEYS)
+    clean["fields"] = [_strip(f, _FIELD_SERVER_KEYS) for f in tmpl.get("fields", [])]
+    return clean
+
+
+def _sanitise_container(c: Dict) -> Dict:
+    return _strip(c, _RESOURCE_SERVER_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# Export helpers
+# ---------------------------------------------------------------------------
+
+
+def _export_templates(inv, ids: Optional[List[int]] = None) -> List[Dict]:
+    """Fetch full template details for all (or selected) templates."""
+    if ids:
+        templates = []
+        for tid in ids:
+            err_console.print(f"  Fetching template {tid}…")
+            templates.append(inv.get_sample_template_by_id(tid))
+        return templates
+    err_console.print("  Listing all templates (paginated)…")
+    stubs = _paginate(inv.list_sample_templates, "templates")
+    templates = []
+    for stub in stubs:
+        templates.append(inv.get_sample_template_by_id(stub["id"]))
+    return templates
+
+
+def _walk_container(
+    inv,
+    stub: Dict,
+    depth: int,
+    parent_global_id: Optional[str],
+) -> List[Dict]:
+    """Recursively fetch a container and all its child containers.
+
+    Each record is annotated with ``_migration`` metadata so the importer can
+    recreate the hierarchy without making additional API calls.
+    """
+    full = inv.get_container_by_id(stub["id"], include_content=True)
+    full["_migration"] = {
+        "depth": depth,
+        "parent_global_id": parent_global_id,
+    }
+    collected = [full]
+
+    # Child containers may live in different response keys depending on API version
+    children: List[Dict] = full.get("storedContainers") or []
+    if not children:
+        # Fallback: generic content list — filter to containers by globalId prefix
+        for item in (full.get("content") or {}).get("content", []):
+            gid = item.get("globalId", "")
+            if gid.startswith("IC"):
+                children.append(item)
+
+    for child in children:
+        collected.extend(_walk_container(inv, child, depth + 1, full["globalId"]))
+
+    return collected
+
+
+def _export_containers(inv, ids: Optional[List[int]] = None) -> List[Dict]:
+    """Walk the container tree from all (or selected) roots."""
+    if ids:
+        roots = [inv.get_container_by_id(cid) for cid in ids]
+    else:
+        err_console.print("  Listing all top-level containers (paginated)…")
+        roots = _paginate(inv.list_top_level_containers, "containers")
+
+    containers: List[Dict] = []
+    for root in roots:
+        err_console.print(f"  Walking tree from {root.get('globalId')} ({root.get('name')})…")
+        containers.extend(_walk_container(inv, root, depth=0, parent_global_id=None))
+    return containers
+
+
+def _collect_subsample_locations(sample: Dict) -> List[Dict]:
+    """Extract where each subsample sits (container + optional grid position)."""
+    locations = []
+    for ss in sample.get("subSamples", []):
+        parents = ss.get("parentContainers") or []
+        if not parents:
+            continue
+        parent = parents[0]  # a subsample lives in exactly one container at a time
+        grid = parent.get("gridLocation") or parent.get("location") or {}
+        locations.append(
+            {
+                "subsample_global_id": ss["globalId"],
+                "container_global_id": parent.get("globalId"),
+                "grid_row": grid.get("rowIndex") or grid.get("row"),
+                "grid_col": grid.get("colIndex") or grid.get("col"),
+            }
+        )
+    return locations
+
+
+def _export_samples(
+    inv,
+    ids: Optional[List[int]] = None,
+) -> Tuple[List[Dict], Set[str]]:
+    """Fetch full sample details including embedded subsamples.
+
+    Returns ``(samples, referenced_template_global_ids)`` so the caller can
+    pull in any templates not already in the export.
+    """
+    if ids:
+        stubs = [{"id": sid} for sid in ids]
+    else:
+        err_console.print("  Listing all samples (paginated)…")
+        stubs = _paginate(inv.list_samples, "samples")
+
+    samples: List[Dict] = []
+    ref_template_gids: Set[str] = set()
+    attachment_count = 0
+
+    for stub in stubs:
+        full = inv.get_sample_by_id(stub["id"])
+
+        # Collect referenced template global ID for auto-inclusion
+        tmpl_ref = full.get("sampleTemplate") or {}
+        tmpl_gid = tmpl_ref.get("globalId") or full.get("templateGlobalId")
+        if tmpl_gid:
+            ref_template_gids.add(tmpl_gid)
+
+        # Capture subsample container placements
+        full["_migration"] = {"subsample_locations": _collect_subsample_locations(full)}
+
+        # Warn about attachments (not migrated in this version)
+        for ss in full.get("subSamples", []):
+            if ss.get("attachments") or ss.get("storedFiles"):
+                attachment_count += 1
+        if full.get("attachments") or full.get("storedFiles"):
+            attachment_count += 1
+
+        samples.append(full)
+
+    if attachment_count:
+        warn(
+            f"{attachment_count} item(s) have file attachments — attachments are not "
+            "included in this snapshot. Re-attach files manually after import."
+        )
+
+    return samples, ref_template_gids
+
+
+# ---------------------------------------------------------------------------
+# Import helpers
+# ---------------------------------------------------------------------------
+
+
+def _import_templates(inv, templates: List[Dict], state: _ImportState, dry_run: bool) -> None:
+    """Phase 1 — create templates and record id + field mappings."""
+    err_console.print(f"\n[bold]Phase 1[/bold] — importing {len(templates)} template(s)…")
+    for tmpl in templates:
+        old_gid = tmpl["globalId"]
+        old_fields = tmpl.get("fields", [])
+
+        if dry_run:
+            console.print(f"  [dim]DRY RUN[/dim]  would create template: {tmpl['name']!r}")
+            continue
+
+        try:
+            payload = _sanitise_template(tmpl)
+            new_tmpl = inv.create_sample_template(sample_template_post=payload)
+            new_gid = new_tmpl["globalId"]
+            state.id_map[old_gid] = new_gid
+            state.numeric_map[tmpl["id"]] = new_tmpl["id"]
+
+            # Map per-field IDs by position — field order is stable from the definition
+            for old_f, new_f in zip(old_fields, new_tmpl.get("fields", [])):
+                if old_f.get("globalId") and new_f.get("id"):
+                    # Store old field globalId → new field numeric id
+                    state.id_map[old_f["globalId"]] = str(new_f["id"])
+
+            console.print(
+                f"  [green]✓[/green]  [cyan]{old_gid}[/cyan] → [cyan]{new_gid}[/cyan]"
+                f"  ({tmpl['name']})"
+            )
+        except Exception as exc:
+            _record_error(state, f"Template {old_gid} ({tmpl.get('name')!r}): {exc}")
+
+
+def _import_containers_flat(
+    inv, containers: List[Dict], state: _ImportState, dry_run: bool
+) -> None:
+    """Phase 2 — create all containers at top level (hierarchy restored in Phase 3)."""
+    err_console.print(
+        f"\n[bold]Phase 2[/bold] — creating {len(containers)} container(s) (flat)…"
+    )
+    for c in containers:
+        old_gid = c["globalId"]
+
+        if dry_run:
+            console.print(
+                f"  [dim]DRY RUN[/dim]  would create container: "
+                f"{c['name']!r} ({c.get('cType', 'LIST')})"
+            )
+            continue
+
+        try:
+            ctype = c.get("cType", "LIST")
+            tags = c.get("tags") or []
+            desc = c.get("description") or ""
+            can_samples = c.get("canStoreSamples", True)
+            can_containers = c.get("canStoreContainers", True)
+
+            if ctype == "GRID":
+                layout = c.get("gridLayout") or {}
+                new_c = inv.create_grid_container(
+                    name=c["name"],
+                    row_count=layout.get("rowsNumber", 1),
+                    column_count=layout.get("columnsNumber", 1),
+                    tags=tags,
+                    description=desc,
+                    can_store_samples=can_samples,
+                    can_store_containers=can_containers,
+                )
+            else:
+                new_c = inv.create_list_container(
+                    name=c["name"],
+                    tags=tags,
+                    description=desc,
+                    can_store_samples=can_samples,
+                    can_store_containers=can_containers,
+                )
+
+            new_gid = new_c["globalId"]
+            state.id_map[old_gid] = new_gid
+            state.numeric_map[c["id"]] = new_c["id"]
+            console.print(
+                f"  [green]✓[/green]  [cyan]{old_gid}[/cyan] → [cyan]{new_gid}[/cyan]"
+                f"  ({c['name']}, {ctype})"
+            )
+        except Exception as exc:
+            _record_error(state, f"Container {old_gid} ({c.get('name')!r}): {exc}")
+
+
+def _import_container_hierarchy(
+    inv, containers: List[Dict], state: _ImportState, dry_run: bool
+) -> None:
+    """Phase 3 — move containers into their parents, shallowest depth first."""
+    needs_move = [
+        c
+        for c in containers
+        if c.get("_migration", {}).get("parent_global_id") and c["globalId"] in state.id_map
+    ]
+    if not needs_move:
+        err_console.print("\n[bold]Phase 3[/bold] — no container nesting to restore.")
+        return
+
+    needs_move.sort(key=lambda c: c["_migration"]["depth"])
+    err_console.print(
+        f"\n[bold]Phase 3[/bold] — restoring hierarchy for {len(needs_move)} container(s)…"
+    )
+
+    for c in needs_move:
+        old_gid = c["globalId"]
+        old_parent_gid = c["_migration"]["parent_global_id"]
+        new_gid = state.id_map.get(old_gid)
+        new_parent_gid = state.id_map.get(old_parent_gid)
+
+        if not new_gid or not new_parent_gid:
+            _record_error(
+                state,
+                f"Container {old_gid}: parent {old_parent_gid} not in id_map — skipped",
+            )
+            continue
+
+        if dry_run:
+            console.print(
+                f"  [dim]DRY RUN[/dim]  would move [cyan]{new_gid}[/cyan]"
+                f" → [cyan]{new_parent_gid}[/cyan]"
+            )
+            continue
+
+        try:
+            inv.add_items_to_list_container(parse_id(new_parent_gid), parse_id(new_gid))
+            console.print(
+                f"  [green]✓[/green]  [cyan]{new_gid}[/cyan] → [cyan]{new_parent_gid}[/cyan]"
+            )
+        except Exception as exc:
+            _record_error(
+                state, f"Container hierarchy {old_gid} → {old_parent_gid}: {exc}"
+            )
+
+
+def _field_updates_by_name(old_fields: List[Dict], new_fields: List[Dict]) -> List[Dict]:
+    """Match old field values to new field objects by field name.
+
+    Returns a list of ``{"id": <new_numeric_id>, "content": <old_value>}`` dicts
+    ready for the sample PUT payload.  Fields present in old but absent from new
+    (name mismatch) are silently skipped.
+    """
+    new_by_name: Dict[str, Dict] = {f["name"]: f for f in new_fields}
+    updates = []
+    seen_names: Set[str] = set()
+    for old_f in old_fields:
+        name = old_f.get("name")
+        if not name:
+            continue
+        if name in seen_names:
+            warn(
+                f"Duplicate field name {name!r} on template — "
+                "only the first occurrence will be migrated."
+            )
+            continue
+        seen_names.add(name)
+        content = old_f.get("content") or old_f.get("value") or old_f.get("data")
+        if content is None:
+            continue
+        new_f = new_by_name.get(name)
+        if new_f is None:
+            continue
+        updates.append({"id": new_f["id"], "content": content})
+    return updates
+
+
+def _import_samples(inv, samples: List[Dict], state: _ImportState, dry_run: bool) -> None:
+    """Phase 4 — create samples from templates; restore field values and subsample metadata."""
+    err_console.print(f"\n[bold]Phase 4[/bold] — importing {len(samples)} sample(s)…")
+
+    for sample in samples:
+        old_sa_gid = sample["globalId"]
+        old_subsamples = sample.get("subSamples", [])
+        old_fields = sample.get("fields", [])
+
+        # Resolve template
+        tmpl_ref = sample.get("sampleTemplate") or {}
+        old_tmpl_gid = tmpl_ref.get("globalId") or sample.get("templateGlobalId")
+        new_tmpl_id = None
+        if old_tmpl_gid:
+            new_tmpl_gid = state.id_map.get(old_tmpl_gid)
+            if new_tmpl_gid:
+                new_tmpl_id = parse_id(new_tmpl_gid)
+            else:
+                warn(f"Sample {old_sa_gid}: template {old_tmpl_gid} not in id_map — created without template.")
+
+        if dry_run:
+            console.print(
+                f"  [dim]DRY RUN[/dim]  would create sample: {sample['name']!r}"
+                f" ({len(old_subsamples)} subsample(s))"
+            )
+            continue
+
+        try:
+            new_sample = inv.create_sample(
+                name=sample["name"],
+                description=sample.get("description"),
+                sample_template_id=new_tmpl_id,
+                subsample_count=max(len(old_subsamples), 1),
+            )
+            new_sa_gid = new_sample["globalId"]
+            state.id_map[old_sa_gid] = new_sa_gid
+            state.numeric_map[sample["id"]] = new_sample["id"]
+
+            # Map subsample IDs by creation order (API preserves insertion order)
+            new_subsamples = new_sample.get("subSamples", [])
+            for old_ss, new_ss in zip(old_subsamples, new_subsamples):
+                state.id_map[old_ss["globalId"]] = new_ss["globalId"]
+                state.numeric_map[old_ss["id"]] = new_ss["id"]
+
+            # Restore custom field values (name-matched)
+            if old_fields and new_sample.get("fields"):
+                field_updates = _field_updates_by_name(old_fields, new_sample["fields"])
+                if field_updates:
+                    inv.retrieve_api_results(
+                        f"/samples/{new_sample['id']}",
+                        request_type="PUT",
+                        params={"fields": field_updates},
+                    )
+
+            # Restore per-subsample names and quantities
+            for old_ss, new_ss in zip(old_subsamples, new_subsamples):
+                _restore_subsample(inv, old_ss, new_ss["id"], state)
+
+            console.print(
+                f"  [green]✓[/green]  [cyan]{old_sa_gid}[/cyan] → [cyan]{new_sa_gid}[/cyan]"
+                f"  ({sample['name']}, {len(old_subsamples)} subsample(s))"
+            )
+        except Exception as exc:
+            _record_error(state, f"Sample {old_sa_gid} ({sample.get('name')!r}): {exc}")
+
+
+def _restore_subsample(inv, old_ss: Dict, new_ss_id: int, state: _ImportState) -> None:
+    """Update a newly-created subsample to match the exported name and quantity."""
+    patch: Dict[str, Any] = {}
+    if old_ss.get("name"):
+        patch["name"] = old_ss["name"]
+    qty = old_ss.get("quantity")
+    if qty:
+        patch["quantity"] = qty
+    notes = old_ss.get("notes")
+    if notes:
+        patch["notes"] = notes
+    if not patch:
+        return
+    try:
+        inv.retrieve_api_results(
+            f"/subSamples/{new_ss_id}",
+            request_type="PUT",
+            params=patch,
+        )
+    except Exception as exc:
+        warn(f"Could not update subsample {new_ss_id}: {exc}")
+        state.errors.append(f"Subsample {new_ss_id} update: {exc}")
+
+
+def _import_subsample_placements(
+    inv, samples: List[Dict], state: _ImportState, dry_run: bool
+) -> None:
+    """Phase 5 — move subsamples into their recorded containers."""
+    placements = [
+        loc
+        for sample in samples
+        for loc in sample.get("_migration", {}).get("subsample_locations", [])
+    ]
+
+    if not placements:
+        err_console.print("\n[bold]Phase 5[/bold] — no subsample placements to restore.")
+        return
+
+    err_console.print(
+        f"\n[bold]Phase 5[/bold] — placing {len(placements)} subsample(s) into containers…"
+    )
+
+    for loc in placements:
+        old_ss_gid = loc["subsample_global_id"]
+        old_c_gid = loc["container_global_id"]
+        new_ss_gid = state.id_map.get(old_ss_gid)
+        new_c_gid = state.id_map.get(old_c_gid)
+
+        if not new_ss_gid or not new_c_gid:
+            _record_error(
+                state,
+                f"Subsample placement {old_ss_gid} → {old_c_gid}: "
+                "one or both IDs not in id_map — skipped",
+            )
+            continue
+
+        if dry_run:
+            console.print(
+                f"  [dim]DRY RUN[/dim]  would place [cyan]{new_ss_gid}[/cyan]"
+                f" → [cyan]{new_c_gid}[/cyan]"
+            )
+            continue
+
+        try:
+            new_ss_id = parse_id(new_ss_gid)
+            new_c_id = parse_id(new_c_gid)
+            row = loc.get("grid_row")
+            col = loc.get("grid_col")
+
+            if row is not None and col is not None:
+                from rspace_client.inv.inv import ByLocation, GridLocation
+
+                placement = ByLocation(new_ss_id, locations=[GridLocation(x=col, y=row)])
+                inv.add_items_to_grid_container(
+                    target_container_id=new_c_id,
+                    grid_placement=placement,
+                )
+            else:
+                inv.add_items_to_list_container(new_c_id, new_ss_id)
+
+            console.print(
+                f"  [green]✓[/green]  [cyan]{new_ss_gid}[/cyan] → [cyan]{new_c_gid}[/cyan]"
+            )
+        except Exception as exc:
+            _record_error(state, f"Subsample placement {old_ss_gid} → {old_c_gid}: {exc}")
+
+
+def _record_error(state: _ImportState, message: str) -> None:
+    warn(message)
+    state.errors.append(message)
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
+@app.command("export")
+def migrate_export(
+    output: Path = typer.Option(..., "--output", "-o", help="Output snapshot file (JSON)."),
+    all_resources: bool = typer.Option(False, "--all", help="Export all inventory resources."),
+    template_ids: Optional[List[str]] = typer.Option(
+        None,
+        "--template",
+        help="Template GlobalID(s) to export (repeat flag for multiple).",
+        metavar="GLOBAL_ID",
+    ),
+    container_ids: Optional[List[str]] = typer.Option(
+        None,
+        "--container",
+        help="Container GlobalID(s) to export (includes the full subtree).",
+        metavar="GLOBAL_ID",
+    ),
+    sample_ids: Optional[List[str]] = typer.Option(
+        None,
+        "--sample",
+        help="Sample GlobalID(s) to export (referenced templates auto-included).",
+        metavar="GLOBAL_ID",
+    ),
+) -> None:
+    """Export inventory to a local snapshot file for migration.
+
+    The snapshot is a self-contained JSON file capturing templates,
+    containers (full hierarchy), samples and their subsample locations.
+    It can be imported to any RSpace server with 'rspace migrate import'.
+
+    Examples:
+
+      rspace migrate export --all --output full_snapshot.json
+
+      rspace migrate export --template IT123 --sample SA456 --output partial.json
+
+      rspace migrate export --container IC789 --output freezer_a.json
+    """
+    if not any([all_resources, template_ids, container_ids, sample_ids]):
+        err_console.print(
+            "[red]Specify --all, or at least one of "
+            "--template / --container / --sample.[/red]"
+        )
+        raise typer.Exit(1)
+
+    ctx = get_context()
+    inv = ctx.inv
+    source_url = str(
+        getattr(inv, "base_url", getattr(inv, "_url", getattr(inv, "rspace_url", "unknown")))
+    )
+
+    blob: Dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {
+            "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source_url": source_url,
+            "scope": "all" if all_resources else "selected",
+        },
+        "templates": [],
+        "containers": [],
+        "samples": [],
+    }
+
+    # ---- Templates -------------------------------------------------------
+    if all_resources or template_ids or sample_ids:
+        t_ids = (
+            [parse_id(t) for t in template_ids]
+            if template_ids and not all_resources
+            else None
+        )
+        err_console.print("[bold]Exporting templates…[/bold]")
+        try:
+            blob["templates"] = _export_templates(inv, ids=t_ids)
+        except Exception as exc:
+            err_console.print(f"[red]Export failed (templates): {exc}[/red]")
+            raise typer.Exit(1)
+        console.print(f"  Collected [green]{len(blob['templates'])}[/green] template(s).")
+
+    # ---- Containers ------------------------------------------------------
+    if all_resources or container_ids:
+        c_ids = (
+            [parse_id(c) for c in container_ids]
+            if container_ids and not all_resources
+            else None
+        )
+        err_console.print("[bold]Exporting containers…[/bold]")
+        try:
+            blob["containers"] = _export_containers(inv, ids=c_ids)
+        except Exception as exc:
+            err_console.print(f"[red]Export failed (containers): {exc}[/red]")
+            raise typer.Exit(1)
+        console.print(f"  Collected [green]{len(blob['containers'])}[/green] container(s).")
+
+    # ---- Samples ---------------------------------------------------------
+    if all_resources or sample_ids:
+        s_ids = (
+            [parse_id(s) for s in sample_ids]
+            if sample_ids and not all_resources
+            else None
+        )
+        err_console.print("[bold]Exporting samples…[/bold]")
+        try:
+            samples, ref_tmpl_gids = _export_samples(inv, ids=s_ids)
+            blob["samples"] = samples
+
+            # Auto-include any templates referenced by selected samples
+            if not all_resources and ref_tmpl_gids:
+                existing_gids = {t["globalId"] for t in blob["templates"]}
+                missing_gids = ref_tmpl_gids - existing_gids
+                if missing_gids:
+                    err_console.print(
+                        f"  Auto-including {len(missing_gids)} referenced template(s)…"
+                    )
+                    missing_ids = [parse_id(g) for g in missing_gids]
+                    blob["templates"].extend(_export_templates(inv, ids=missing_ids))
+        except Exception as exc:
+            err_console.print(f"[red]Export failed (samples): {exc}[/red]")
+            raise typer.Exit(1)
+        console.print(f"  Collected [green]{len(blob['samples'])}[/green] sample(s).")
+
+    # ---- Write blob ------------------------------------------------------
+    output.write_text(json.dumps(blob, indent=2, default=str))
+    console.print(f"\n[green]Snapshot written to:[/green] {output}")
+    console.print(
+        f"  Templates: [green]{len(blob['templates'])}[/green]  "
+        f"Containers: [green]{len(blob['containers'])}[/green]  "
+        f"Samples: [green]{len(blob['samples'])}[/green]"
+    )
+
+
+@app.command("import")
+def migrate_import(
+    input_file: Path = typer.Argument(
+        ..., help="Snapshot file produced by 'rspace migrate export'."
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate and preview what would be created, without making any changes.",
+    ),
+    checkpoint_file: Optional[Path] = typer.Option(
+        None,
+        "--checkpoint",
+        help=(
+            "Checkpoint file to resume an interrupted import. "
+            "Defaults to <snapshot>.checkpoint alongside the input file."
+        ),
+    ),
+    skip_templates: bool = typer.Option(False, "--skip-templates", help="Skip Phase 1."),
+    skip_containers: bool = typer.Option(False, "--skip-containers", help="Skip Phases 2 & 3."),
+    skip_samples: bool = typer.Option(False, "--skip-samples", help="Skip Phases 4 & 5."),
+) -> None:
+    """Import an inventory snapshot to the current RSpace server.
+
+    Recreates templates, containers (preserving hierarchy), samples, and
+    subsample container placements in five ordered phases.  A checkpoint file
+    is written after each phase so a failed import can be resumed with
+    --checkpoint without duplicating already-created resources.
+
+    To migrate between servers:
+
+      # 1. Export from source
+      rspace --profile source migrate export --all --output snap.json
+
+      # 2. Import to target
+      rspace --profile target migrate import snap.json
+
+    Examples:
+
+      rspace migrate import snap.json --dry-run
+
+      rspace migrate import snap.json
+
+      rspace migrate import snap.json --checkpoint snap.json.checkpoint
+    """
+    if not input_file.exists():
+        err_console.print(f"[red]File not found:[/red] {input_file}")
+        raise typer.Exit(1)
+
+    try:
+        blob = json.loads(input_file.read_text())
+    except json.JSONDecodeError as exc:
+        err_console.print(f"[red]Invalid JSON in snapshot:[/red] {exc}")
+        raise typer.Exit(1)
+
+    schema_ver = blob.get("schema_version", 0)
+    if schema_ver != SCHEMA_VERSION:
+        warn(
+            f"Snapshot schema version {schema_ver} does not match expected "
+            f"{SCHEMA_VERSION} — proceeding with caution."
+        )
+
+    templates: List[Dict] = blob.get("templates", [])
+    containers: List[Dict] = blob.get("containers", [])
+    samples: List[Dict] = blob.get("samples", [])
+    meta: Dict = blob.get("meta", {})
+
+    if dry_run:
+        console.print("[bold yellow]DRY RUN — no changes will be made.[/bold yellow]")
+
+    console.print(
+        f"\nSnapshot from [cyan]{meta.get('source_url', 'unknown')}[/cyan]"
+        f"  exported [cyan]{meta.get('exported_at', 'unknown')}[/cyan]"
+    )
+    console.print(
+        f"Contains: [green]{len(templates)}[/green] template(s)  "
+        f"[green]{len(containers)}[/green] container(s)  "
+        f"[green]{len(samples)}[/green] sample(s)"
+    )
+
+    # Resolve / load checkpoint
+    if checkpoint_file is None:
+        checkpoint_file = input_file.with_suffix(input_file.suffix + _CHECKPOINT_SUFFIX)
+
+    if checkpoint_file.exists():
+        state = _load_checkpoint(checkpoint_file)
+        console.print(
+            f"[dim]Resuming from checkpoint ({checkpoint_file}). "
+            f"Completed: {state.completed_phases}[/dim]"
+        )
+    else:
+        state = _ImportState()
+
+    ctx = get_context()
+    inv = ctx.inv
+
+    # ---- Phase 1: Templates --------------------------------------------
+    if not skip_templates and "templates" not in state.completed_phases:
+        _import_templates(inv, templates, state, dry_run)
+        if not dry_run:
+            state.completed_phases.append("templates")
+            _save_checkpoint(checkpoint_file, state)
+    else:
+        err_console.print("\n[dim]Phase 1 (templates) — skipped.[/dim]")
+
+    # ---- Phase 2: Containers (flat) ------------------------------------
+    if not skip_containers and "containers_flat" not in state.completed_phases:
+        _import_containers_flat(inv, containers, state, dry_run)
+        if not dry_run:
+            state.completed_phases.append("containers_flat")
+            _save_checkpoint(checkpoint_file, state)
+    else:
+        err_console.print("\n[dim]Phase 2 (containers flat) — skipped.[/dim]")
+
+    # ---- Phase 3: Container hierarchy ----------------------------------
+    if not skip_containers and "containers_hierarchy" not in state.completed_phases:
+        _import_container_hierarchy(inv, containers, state, dry_run)
+        if not dry_run:
+            state.completed_phases.append("containers_hierarchy")
+            _save_checkpoint(checkpoint_file, state)
+    else:
+        err_console.print("\n[dim]Phase 3 (container hierarchy) — skipped.[/dim]")
+
+    # ---- Phase 4: Samples + subsamples ---------------------------------
+    if not skip_samples and "samples" not in state.completed_phases:
+        _import_samples(inv, samples, state, dry_run)
+        if not dry_run:
+            state.completed_phases.append("samples")
+            _save_checkpoint(checkpoint_file, state)
+    else:
+        err_console.print("\n[dim]Phase 4 (samples) — skipped.[/dim]")
+
+    # ---- Phase 5: Subsample placements ---------------------------------
+    if not skip_samples and "subsample_placements" not in state.completed_phases:
+        _import_subsample_placements(inv, samples, state, dry_run)
+        if not dry_run:
+            state.completed_phases.append("subsample_placements")
+            _save_checkpoint(checkpoint_file, state)
+    else:
+        err_console.print("\n[dim]Phase 5 (subsample placements) — skipped.[/dim]")
+
+    # ---- Summary -------------------------------------------------------
+    console.print("\n" + "─" * 60)
+    if state.errors:
+        err_console.print(
+            f"[yellow]Completed with {len(state.errors)} error(s) "
+            f"(checkpoint kept at {checkpoint_file}):[/yellow]"
+        )
+        for err in state.errors:
+            err_console.print(f"  [yellow]•[/yellow] {err}")
+        raise typer.Exit(1)
+
+    console.print("[green]Migration complete — no errors.[/green]")
+    if not dry_run and checkpoint_file.exists():
+        checkpoint_file.unlink(missing_ok=True)
+        err_console.print(f"[dim]Checkpoint removed.[/dim]")
