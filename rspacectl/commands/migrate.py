@@ -500,19 +500,20 @@ def _import_container_hierarchy(
             migration = c.get("_migration", {})
             col = migration.get("parent_grid_col")
             row = migration.get("parent_grid_row")
-            new_c_id = parse_id(new_gid)
+            # Items being moved require the globalId string (IC/SS prefix) so that
+            # the SDK's Id.is_movable() check passes; target container accepts numeric.
             new_parent_id = parse_id(new_parent_gid)
 
             if col is not None and row is not None:
                 from rspace_client.inv.inv import ByLocation, GridLocation
 
-                placement = ByLocation(new_c_id, locations=[GridLocation(x=col, y=row)])
+                placement = ByLocation(new_gid, locations=[GridLocation(x=col, y=row)])
                 inv.add_items_to_grid_container(
                     target_container_id=new_parent_id,
                     grid_placement=placement,
                 )
             else:
-                inv.add_items_to_list_container(new_parent_id, new_c_id)
+                inv.add_items_to_list_container(new_parent_id, new_gid)
 
             console.print(
                 f"  [green]✓[/green]  [cyan]{new_gid}[/cyan] → [cyan]{new_parent_gid}[/cyan]"
@@ -554,9 +555,81 @@ def _field_updates_by_name(old_fields: List[Dict], new_fields: List[Dict]) -> Li
     return updates
 
 
-def _import_samples(inv, samples: List[Dict], state: _ImportState, dry_run: bool) -> None:
+def _build_tmpl_field_name_map(templates: List[Dict]) -> Dict[str, Dict[str, str]]:
+    """Return {old_tmpl_globalId: {field_name: old_field_globalId}} from the exported templates.
+
+    Used in Phase 4 to pre-populate mandatory template fields at sample creation time,
+    avoiding a mandatory-field validation failure when the two-step create→update approach
+    would leave required fields empty during the initial POST.
+    """
+    result: Dict[str, Dict[str, str]] = {}
+    for tmpl in templates:
+        gid = tmpl.get("globalId")
+        if gid:
+            result[gid] = {f["name"]: f["globalId"] for f in tmpl.get("fields", []) if f.get("name") and f.get("globalId")}
+    return result
+
+
+def _creation_fields_from_state(
+    old_fields: List[Dict],
+    old_tmpl_gid: str,
+    tmpl_field_name_map: Dict[str, Dict[str, str]],
+    state: "_ImportState",
+) -> Optional[List[Dict]]:
+    """Build the ``fields`` list for ``create_sample`` using template field IDs.
+
+    When a template has mandatory fields, ``create_sample`` must include non-empty
+    values for those fields or the API rejects the request.  The RSpace API accepts
+    template field IDs (not sample-instance field IDs) in the creation POST body.
+
+    The API also requires that if ``fields`` is provided it must contain an entry for
+    EVERY template field (not just the non-empty ones), so we iterate over all
+    template fields and fill in values from the old sample where available.
+
+    Returns ``None`` if the template has no fields mapped in ``state.id_map``.
+    """
+    name_to_old_gid = tmpl_field_name_map.get(old_tmpl_gid, {})
+    if not name_to_old_gid:
+        return None
+
+    # Build name→content lookup from the old sample's field values
+    old_by_name: Dict[str, Any] = {}
+    for old_f in old_fields:
+        name = old_f.get("name")
+        if name:
+            content = old_f.get("content") or old_f.get("value") or old_f.get("data")
+            old_by_name[name] = content  # None if all fallbacks are falsy
+
+    fields_list: List[Dict] = []
+    for field_name, old_field_gid in name_to_old_gid.items():
+        new_field_id_str = state.id_map.get(old_field_gid)
+        if not new_field_id_str:
+            continue
+        try:
+            entry: Dict[str, Any] = {"id": int(new_field_id_str)}
+            content = old_by_name.get(field_name)
+            if content is not None:
+                entry["content"] = content
+            fields_list.append(entry)
+        except (ValueError, TypeError):
+            continue
+
+    return fields_list if fields_list else None
+
+
+def _import_samples(
+    inv,
+    samples: List[Dict],
+    state: "_ImportState",
+    dry_run: bool,
+    templates: Optional[List[Dict]] = None,
+) -> None:
     """Phase 4 — create samples from templates; restore field values and subsample metadata."""
     err_console.print(f"\n[bold]Phase 4[/bold] — importing {len(samples)} sample(s)…")
+
+    # Build name→old_field_globalId maps per template so we can pre-populate mandatory
+    # fields at creation time (avoids API rejections for empty mandatory fields).
+    tmpl_field_name_map = _build_tmpl_field_name_map(templates or [])
 
     for sample in samples:
         old_sa_gid = sample["globalId"]
@@ -594,11 +667,20 @@ def _import_samples(inv, samples: List[Dict], state: _ImportState, dry_run: bool
             continue
 
         try:
+            # Pre-populate template fields in the creation POST to satisfy mandatory
+            # field validation (uses template field IDs, not sample-instance field IDs).
+            creation_fields = None
+            if old_tmpl_gid and new_tmpl_id and old_fields:
+                creation_fields = _creation_fields_from_state(
+                    old_fields, old_tmpl_gid, tmpl_field_name_map, state
+                )
+
             new_sample = inv.create_sample(
                 name=sample["name"],
                 description=sample.get("description"),
                 sample_template_id=new_tmpl_id,
                 subsample_count=max(len(old_subsamples), 1),
+                fields=creation_fields,
             )
             new_sa_gid = new_sample["globalId"]
             state.id_map[old_sa_gid] = new_sa_gid
@@ -610,7 +692,8 @@ def _import_samples(inv, samples: List[Dict], state: _ImportState, dry_run: bool
                 state.id_map[old_ss["globalId"]] = new_ss["globalId"]
                 state.numeric_map[old_ss["id"]] = new_ss["id"]
 
-            # Restore custom field values (name-matched)
+            # Restore custom field values (name-matched against sample field IDs).
+            # This is also the fallback path when creation_fields was None.
             if old_fields and new_sample.get("fields"):
                 field_updates = _field_updates_by_name(old_fields, new_sample["fields"])
                 if field_updates:
@@ -705,7 +788,8 @@ def _import_subsample_placements(
             continue
 
         try:
-            new_ss_id = parse_id(new_ss_gid)
+            # Items being moved require the globalId string (SS prefix) so that
+            # the SDK's Id.is_movable() check passes; target container accepts numeric.
             new_c_id = parse_id(new_c_gid)
             row = loc.get("grid_row")
             col = loc.get("grid_col")
@@ -713,13 +797,13 @@ def _import_subsample_placements(
             if row is not None and col is not None:
                 from rspace_client.inv.inv import ByLocation, GridLocation
 
-                placement = ByLocation(new_ss_id, locations=[GridLocation(x=col, y=row)])
+                placement = ByLocation(new_ss_gid, locations=[GridLocation(x=col, y=row)])
                 inv.add_items_to_grid_container(
                     target_container_id=new_c_id,
                     grid_placement=placement,
                 )
             else:
-                inv.add_items_to_list_container(new_c_id, new_ss_id)
+                inv.add_items_to_list_container(new_c_id, new_ss_gid)
 
             console.print(
                 f"  [green]✓[/green]  [cyan]{new_ss_gid}[/cyan] → [cyan]{new_c_gid}[/cyan]"
@@ -1018,7 +1102,7 @@ def migrate_import(
 
     # ---- Phase 4: Samples + subsamples ---------------------------------
     if not skip_samples and "samples" not in state.completed_phases:
-        _import_samples(inv, samples, state, dry_run)
+        _import_samples(inv, samples, state, dry_run, templates=templates)
         if not dry_run:
             state.completed_phases.append("samples")
             _save_checkpoint(checkpoint_file, state)
