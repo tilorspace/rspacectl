@@ -665,7 +665,7 @@ def _export_files(
 
     err_console.print("\n[bold]Exporting files…[/bold]")
 
-    # --- Templates: attachments + icon ---
+    # --- Templates: attachments + preview image + icon ---
     for tmpl in templates:
         gid = tmpl.get("globalId", "")
         mig = tmpl.setdefault("_migration", {})
@@ -675,6 +675,10 @@ def _export_files(
         if att_meta or ef_meta:
             mig["attachments"] = att_meta
             mig["attachment_extra_fields"] = ef_meta
+
+        preview_local = _export_preview_image(inv, tmpl, img_dir)
+        if preview_local:
+            mig["preview_local"] = preview_local
 
         icon_local = _export_template_icon(inv, tmpl, ico_dir)
         if icon_local:
@@ -1324,20 +1328,22 @@ def _import_attachments(
 
 def _import_preview_images(
     inv,
+    templates: List[Dict],
     containers: List[Dict],
     samples: List[Dict],
     state: _ImportState,
     dry_run: bool,
     snapshot_dir: Path,
 ) -> None:
-    """Phase 7 — set preview images for samples, subsamples, and containers."""
+    """Phase 7 — set preview images for templates, samples, subsamples, and containers."""
     img_dir = _images_dir(snapshot_dir)
     if not img_dir.exists():
         err_console.print("\n[bold]Phase 7[/bold] — no images directory; skipping.")
         return
 
     all_items: List[Tuple[str, Dict]] = (
-        [(c["globalId"], c) for c in containers]
+        [(t["globalId"], t) for t in templates]
+        + [(c["globalId"], c) for c in containers]
         + [(s["globalId"], s) for s in samples]
         + [
             (ss["globalId"], ss)
@@ -1777,7 +1783,7 @@ def migrate_import(
 
     # ---- Phase 7: Preview images ---------------------------------------
     if not skip_files and "preview_images" not in state.completed_phases:
-        _import_preview_images(inv, containers, samples, state, dry_run, snapshot_dir)
+        _import_preview_images(inv, templates, containers, samples, state, dry_run, snapshot_dir)
         if not dry_run:
             state.completed_phases.append("preview_images")
             _save_checkpoint(checkpoint_file, state)
