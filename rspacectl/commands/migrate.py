@@ -65,6 +65,7 @@ _RESOURCE_SERVER_KEYS: frozenset = frozenset(
     }
 )
 _FIELD_SERVER_KEYS: frozenset = frozenset({"id", "globalId", "created", "lastModified", "links"})
+_ATTACHMENT_FIELD_TYPES: frozenset = frozenset({"attachment", "file"})
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +283,7 @@ def _export_containers(
 
     containers: List[Dict] = []
     found_sample_ids: Set[int] = set()
+    container_attachment_count = 0
     # Only auto-collect sample IDs when exporting specific containers
     collect_samples = ids is not None
     for root in roots:
@@ -292,6 +294,24 @@ def _export_containers(
                 found_sample_ids=found_sample_ids if collect_samples else None,
             )
         )
+
+    for c in containers:
+        has_attachment = (
+            bool(c.get("attachments") or c.get("storedFiles"))
+            or any(
+                ef.get("type") in _ATTACHMENT_FIELD_TYPES
+                for ef in (c.get("extraFields") or [])
+            )
+        )
+        if has_attachment:
+            container_attachment_count += 1
+
+    if container_attachment_count:
+        warn(
+            f"{container_attachment_count} container(s) have file attachments — "
+            "attachments are not included in this snapshot. Re-attach files manually after import."
+        )
+
     return containers, found_sample_ids
 
 
@@ -361,11 +381,19 @@ def _export_samples(
         # Capture subsample container placements
         full["_migration"] = {"subsample_locations": _collect_subsample_locations(full)}
 
-        # Warn about attachments (not migrated in this version)
+        # Warn about attachments and attachment-type extraFields (not migrated in this version)
         for ss in full.get("subSamples", []):
-            if ss.get("attachments") or ss.get("storedFiles"):
+            has_attachment = bool(ss.get("attachments") or ss.get("storedFiles")) or any(
+                ef.get("type") in _ATTACHMENT_FIELD_TYPES
+                for ef in (ss.get("extraFields") or [])
+            )
+            if has_attachment:
                 attachment_count += 1
-        if full.get("attachments") or full.get("storedFiles"):
+        has_sample_attachment = bool(full.get("attachments") or full.get("storedFiles")) or any(
+            ef.get("type") in _ATTACHMENT_FIELD_TYPES
+            for ef in (full.get("extraFields") or [])
+        )
+        if has_sample_attachment:
             attachment_count += 1
 
         samples.append(full)
