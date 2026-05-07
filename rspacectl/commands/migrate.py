@@ -299,19 +299,48 @@ def _export_attachment_extra_fields(inv, item: Dict, item_dir: Path) -> List[Dic
 
 
 def _export_preview_image(inv, item: Dict, images_dir: Path) -> Optional[str]:
-    """Download the preview image (rel=image link) for samples, subsamples, containers.
+    """Download the preview image for an inventory item (SA/SS/IC/IT).
 
+    The image link appears in the item's ``links`` array only when a preview
+    image has been set *and* the API includes it in GET responses.  In practice
+    the link is sometimes absent even when an image exists, so we fall back to
+    constructing the canonical URL directly:
+        {rspace_url}/api/inventory/v1/{endpoint}/{id}/image
+
+    A 404 from that URL means no image is set; any other error is warned.
     Returns the local filename relative to images_dir, or None.
     """
-    href = _find_link(item, "image")
-    if not href:
+    import requests as _requests
+
+    gid = item.get("globalId", "")
+    if not gid:
         return None
-    gid = item.get("globalId", "unknown")
+
+    # Prefer the link if the API provided it
+    href = _find_link(item, "image")
+
+    if not href:
+        # Construct the URL from the globalId prefix → endpoint mapping
+        from rspace_client.inv.inv import Id
+        try:
+            s_id = Id(gid)
+            endpoint = s_id.get_api_endpoint()
+            href = f"{inv._get_api_url()}/{endpoint}/{s_id.as_id()}/image"
+        except Exception:
+            return None
+
     local_name = f"{gid}_preview.png"
     dest = images_dir / local_name
-    images_dir.mkdir(parents=True, exist_ok=True)
     try:
-        inv.download_link_to_file(href, str(dest))
+        headers = {"apiKey": inv.api_key, "Accept": "application/octet-stream"}
+        resp = _requests.get(href, headers=headers, stream=True)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        images_dir.mkdir(parents=True, exist_ok=True)
+        with open(dest, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=128):
+                fh.write(chunk)
         return local_name
     except Exception as exc:
         warn(f"Could not download preview image for {gid}: {exc}")
