@@ -1417,7 +1417,7 @@ def _import_preview_images(
         try:
             with open(src, "rb") as fh:
                 inv.set_image(new_gid, fh)
-            console.print(f"  [green]✓[/green]  preview image → [cyan]{new_gid}[/cyan]")
+            console.print(f"  [green]✓[/green]  [cyan]{old_gid}[/cyan] → [cyan]{new_gid}[/cyan]  (preview image)")
         except Exception as exc:
             _record_error(state, f"Preview image for {old_gid}: {exc}")
 
