@@ -1649,12 +1649,49 @@ def migrate_export(
     # ---- Write blob ------------------------------------------------------
     json_path = _snapshot_json(snapshot_dir)
     json_path.write_text(json.dumps(blob, indent=2, default=str))
+
+    # Tally file export stats from the _migration dicts written by _export_files.
+    all_items = (
+        blob["templates"]
+        + blob["containers"]
+        + blob["samples"]
+        + [ss for s in blob["samples"] for ss in s.get("subSamples", [])]
+    )
+    n_attachments = sum(
+        len((item.get("_migration") or {}).get("attachments") or [])
+        for item in all_items
+    )
+    n_images = sum(
+        1 for item in all_items if (item.get("_migration") or {}).get("preview_local")
+    )
+    n_icons = sum(
+        1 for t in blob["templates"] if (t.get("_migration") or {}).get("icon_local")
+    )
+    n_ic_backgrounds = sum(
+        1 for c in blob["containers"]
+        if (c.get("_migration") or {}).get("image_container", {}).get("background_local")
+    )
+
     console.print(f"\n[green]Snapshot written to:[/green] {snapshot_dir}/")
     console.print(
         f"  Templates: [green]{len(blob['templates'])}[/green]  "
         f"Containers: [green]{len(blob['containers'])}[/green]  "
         f"Samples: [green]{len(blob['samples'])}[/green]"
     )
+    if not no_files:
+        parts = []
+        if n_attachments:
+            parts.append(f"Attachments: [green]{n_attachments}[/green]")
+        if n_images:
+            parts.append(f"Preview images: [green]{n_images}[/green]")
+        if n_icons:
+            parts.append(f"Template icons: [green]{n_icons}[/green]")
+        if n_ic_backgrounds:
+            parts.append(f"IMAGE backgrounds: [green]{n_ic_backgrounds}[/green]")
+        if parts:
+            console.print("  " + "  ".join(parts))
+        else:
+            console.print("  [dim]No files exported.[/dim]")
 
 
 @app.command("import")
