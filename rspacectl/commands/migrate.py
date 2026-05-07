@@ -278,20 +278,28 @@ def _export_containers(
 
 
 def _collect_subsample_locations(sample: Dict) -> List[Dict]:
-    """Extract where each subsample sits (container + optional grid position)."""
+    """Extract where each subsample sits (container + optional grid position).
+
+    The RSpace API returns the grid position in the subsample's own
+    ``parentLocation`` field (``{"coordX": col, "coordY": row}``), not inside
+    the ``parentContainers`` entry.  We record ``grid_col`` / ``grid_row`` only
+    when the immediate parent is a GRID container — for LIST parents the coords
+    are sequential slot IDs that carry no meaningful position.
+    """
     locations = []
     for ss in sample.get("subSamples", []):
         parents = ss.get("parentContainers") or []
         if not parents:
             continue
         parent = parents[0]  # a subsample lives in exactly one container at a time
-        grid = parent.get("gridLocation") or parent.get("location") or {}
+        is_grid = parent.get("cType") == "GRID"
+        parent_loc = ss.get("parentLocation") or {}
         locations.append(
             {
                 "subsample_global_id": ss["globalId"],
                 "container_global_id": parent.get("globalId"),
-                "grid_row": grid.get("rowIndex") or grid.get("row"),
-                "grid_col": grid.get("colIndex") or grid.get("col"),
+                "grid_col": parent_loc.get("coordX") if is_grid else None,
+                "grid_row": parent_loc.get("coordY") if is_grid else None,
             }
         )
     return locations
