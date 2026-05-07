@@ -219,15 +219,16 @@ def _sanitise_template(tmpl: Dict) -> Dict:
 
 
 def _find_link(item: Dict, rel: str) -> Optional[str]:
-    """Return the href for the first link whose rel matches, or None.
+    """Return the URL for the first link whose rel matches, or None.
 
-    The RSpace inventory API uses HAL-style ``_links`` (not ``links``).
-    We check both for resilience.
+    The RSpace inventory API uses ``_links`` (not ``links``), and the URL
+    field is ``"link"`` (not ``"href"``).  We check both field names for
+    resilience across API versions.
     """
     for key in ("_links", "links"):
         for link in item.get(key) or []:
             if link.get("rel") == rel:
-                return link.get("href")
+                return link.get("link") or link.get("href")
     return None
 
 
@@ -311,70 +312,41 @@ def _export_preview_image(inv, item: Dict, images_dir: Path) -> Optional[str]:
     the link is sometimes absent even when an image exists, so we fall back to
     probing candidate URLs derived from the globalId.
 
-    A 404 from all candidates means no image is set; any other error is warned.
+    A 404 means no image is set; any other error is warned.
     Returns the local filename relative to images_dir, or None.
     """
-    import requests as _requests
+    import requests as _requests  # noqa: PLC0415 — lazy import to avoid hard dep at module load
 
     gid = item.get("globalId", "")
     if not gid:
         return None
 
-    from rspace_client.inv.inv import Id
-    try:
-        s_id = Id(gid)
-        endpoint = s_id.get_api_endpoint()
-        numeric_id = s_id.as_id()
-    except Exception:
+    # The image URL is a hash-based path (/files/image/{hash}) that cannot be
+    # constructed from the globalId — we rely entirely on the _links array.
+    # Prefer "image" (full resolution); fall back to "thumbnail".
+    url = _find_link(item, "image") or _find_link(item, "thumbnail")
+    if not url:
         return None
-
-    # Collect candidate URLs: prefer explicit links, then constructed patterns.
-    # The RSpace API has used both /image and /thumbnail as the terminal path
-    # segment; try both so we handle server version differences.
-    candidates: List[str] = []
-    for rel in ("image", "thumbnail", "thumnail"):  # "thumnail" is a known SDK typo
-        href = _find_link(item, rel)
-        if href and href not in candidates:
-            candidates.append(href)
-    base = f"{inv._get_api_url()}/{endpoint}/{numeric_id}"
-    for suffix in ("/image", "/thumbnail"):
-        url = base + suffix
-        if url not in candidates:
-            candidates.append(url)
-
-    # Log what links the API returned so users can report unexpected rel names.
-    all_links = (item.get("_links") or []) + (item.get("links") or [])
-    actual_rels = [lnk.get("rel") for lnk in all_links]
-    if actual_rels:
-        err_console.print(f"  [dim]{gid} links: {actual_rels}[/dim]")
 
     local_name = f"{gid}_preview.png"
     dest = images_dir / local_name
     headers = {"apiKey": inv.api_key, "Accept": "application/octet-stream"}
 
-    for url in candidates:
-        try:
-            resp = _requests.get(url, headers=headers, stream=True)
-            if resp.status_code == 404:
-                continue
-            resp.raise_for_status()
-            content_type = resp.headers.get("Content-Type", "")
-            if "json" in content_type:
-                # Endpoint returned JSON (e.g. an error body with 200 status) — skip
-                err_console.print(
-                    f"  [dim]{gid} image URL {url} returned JSON ({content_type}) — skipping[/dim]"
-                )
-                continue
-            images_dir.mkdir(parents=True, exist_ok=True)
-            with open(dest, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=128):
-                    fh.write(chunk)
-            return local_name
-        except Exception as exc:
-            err_console.print(f"  [dim]{gid} image URL {url} failed: {exc}[/dim]")
-            continue
-
-    return None
+    try:
+        resp = _requests.get(url, headers=headers, stream=True)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        if "json" in resp.headers.get("Content-Type", ""):
+            return None
+        images_dir.mkdir(parents=True, exist_ok=True)
+        with open(dest, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=128):
+                fh.write(chunk)
+        return local_name
+    except Exception as exc:
+        warn(f"Could not download preview image for {gid}: {exc}")
+        return None
 
 
 def _export_template_icon(inv, tmpl: Dict, icons_dir: Path) -> Optional[str]:
