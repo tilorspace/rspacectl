@@ -9,6 +9,7 @@ from . import (
     get_cmd,
     import_cmd,
     list_cmd,
+    migrate,
     move,
     search,
     share,
