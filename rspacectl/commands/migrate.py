@@ -149,9 +149,6 @@ def _sanitise_template(tmpl: Dict) -> Dict:
     return clean
 
 
-def _sanitise_container(c: Dict) -> Dict:
-    return _strip(c, _RESOURCE_SERVER_KEYS)
-
 
 # ---------------------------------------------------------------------------
 # Export helpers
@@ -196,7 +193,8 @@ def _walk_container(
     encountered in the location contents will be added to it so the caller
     can auto-include those samples in the export.
     """
-    full = inv.get_container_by_id(stub["id"], include_content=True)
+    container_id = stub.get("id") or parse_id(stub.get("globalId", ""))
+    full = inv.get_container_by_id(container_id, include_content=True)
     full["_migration"] = {
         "depth": depth,
         "parent_global_id": parent_global_id,
@@ -204,6 +202,19 @@ def _walk_container(
         "parent_grid_row": parent_grid_row,
     }
     collected = [full]
+
+    # Sanity-check: warn if the API returned fewer locations than contentSummary
+    # reports. This would indicate silent truncation (e.g. future API pagination).
+    content_summary = full.get("contentSummary") or {}
+    reported_total = content_summary.get("totalCount")
+    locations_returned = len(full.get("locations") or [])
+    if reported_total is not None and locations_returned < reported_total:
+        warn(
+            f"Container {full.get('globalId')} ({full.get('name')!r}): "
+            f"contentSummary reports {reported_total} item(s) but only "
+            f"{locations_returned} location(s) were returned — some items may "
+            "be missing from the export."
+        )
 
     # The API returns child items in locations[*].content (coordX/Y give grid pos).
     # storedContainers / content.content are kept as fallbacks for older API versions.
@@ -222,12 +233,19 @@ def _walk_container(
                 found_sample_ids.add(parent_sample_id)
 
     if not children_with_pos:
+        # storedContainers / content.content are legacy fallback fields from older
+        # API versions. Items here may lack a numeric 'id' and carry no grid
+        # position; we synthesise id from globalId if needed.
         for item in (full.get("storedContainers") or []):
+            if not item.get("id") and item.get("globalId"):
+                item = dict(item, id=parse_id(item["globalId"]))
             children_with_pos.append((item, None, None))
 
     if not children_with_pos:
         for item in (full.get("content") or {}).get("content", []):
             if item.get("globalId", "").startswith("IC"):
+                if not item.get("id") and item.get("globalId"):
+                    item = dict(item, id=parse_id(item["globalId"]))
                 children_with_pos.append((item, None, None))
 
     # Only pass grid coords when THIS container is a GRID — for LIST containers
@@ -430,6 +448,17 @@ def _import_containers_flat(
             desc = c.get("description") or ""
             can_samples = c.get("canStoreSamples", True)
             can_containers = c.get("canStoreContainers", True)
+            extra_fields = c.get("extraFields") or []
+
+            if ctype == "IMAGE":
+                # IMAGE containers use a background image with custom marker
+                # positions that cannot be reproduced from the snapshot — recreate
+                # as a LIST container and warn so the user can restore manually.
+                warn(
+                    f"Container {old_gid} ({c['name']!r}) is an IMAGE container. "
+                    "Image containers cannot be fully migrated (background image and "
+                    "marker positions are lost). It will be recreated as a LIST container."
+                )
 
             if ctype == "GRID":
                 layout = c.get("gridLayout") or {}
@@ -439,14 +468,17 @@ def _import_containers_flat(
                     column_count=layout.get("columnsNumber", 1),
                     tags=tags,
                     description=desc,
+                    extra_fields=extra_fields,
                     can_store_samples=can_samples,
                     can_store_containers=can_containers,
                 )
             else:
+                # Covers LIST and IMAGE (IMAGE recreated as LIST with a warning above)
                 new_c = inv.create_list_container(
                     name=c["name"],
                     tags=tags,
                     description=desc,
+                    extra_fields=extra_fields,
                     can_store_samples=can_samples,
                     can_store_containers=can_containers,
                 )
@@ -686,6 +718,7 @@ def _import_samples(
 
             new_sample = inv.create_sample(
                 name=sample["name"],
+                tags=sample.get("tags") or [],
                 description=sample.get("description"),
                 sample_template_id=new_tmpl_id,
                 subsample_count=max(len(old_subsamples), 1),
@@ -706,10 +739,15 @@ def _import_samples(
             if old_fields and new_sample.get("fields"):
                 field_updates = _field_updates_by_name(old_fields, new_sample["fields"])
                 if field_updates:
+                    put_params: Dict[str, Any] = {"fields": field_updates}
+                    # Include tags in the PUT to avoid the API clearing them
+                    sample_tags = sample.get("tags")
+                    if sample_tags:
+                        put_params["tags"] = sample_tags
                     inv.retrieve_api_results(
                         f"/samples/{new_sample['id']}",
                         request_type="PUT",
-                        params={"fields": field_updates},
+                        params=put_params,
                     )
 
             # Restore per-subsample names and quantities
@@ -725,7 +763,7 @@ def _import_samples(
 
 
 def _restore_subsample(inv, old_ss: Dict, new_ss_id: int, state: _ImportState) -> None:
-    """Update a newly-created subsample to match the exported name and quantity."""
+    """Update a newly-created subsample to match the exported name, quantity, and tags."""
     patch: Dict[str, Any] = {}
     if old_ss.get("name"):
         patch["name"] = old_ss["name"]
@@ -735,6 +773,9 @@ def _restore_subsample(inv, old_ss: Dict, new_ss_id: int, state: _ImportState) -
     notes = old_ss.get("notes")
     if notes:
         patch["notes"] = notes
+    tags = old_ss.get("tags")
+    if tags:
+        patch["tags"] = tags
     if not patch:
         return
     try:
