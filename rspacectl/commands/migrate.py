@@ -515,7 +515,8 @@ def _import_container_hierarchy(
             if col is not None and row is not None:
                 from rspace_client.inv.inv import ByLocation, GridLocation
 
-                placement = ByLocation(new_gid, locations=[GridLocation(x=col, y=row)])
+                # ByLocation(locations, *items_to_move) — locations list is first arg
+                placement = ByLocation([GridLocation(x=col, y=row)], new_gid)
                 inv.add_items_to_grid_container(
                     target_container_id=new_parent_id,
                     grid_placement=placement,
@@ -805,7 +806,8 @@ def _import_subsample_placements(
             if row is not None and col is not None:
                 from rspace_client.inv.inv import ByLocation, GridLocation
 
-                placement = ByLocation(new_ss_gid, locations=[GridLocation(x=col, y=row)])
+                # ByLocation(locations, *items_to_move) — locations list is first arg
+                placement = ByLocation([GridLocation(x=col, y=row)], new_ss_gid)
                 inv.add_items_to_grid_container(
                     target_container_id=new_c_id,
                     grid_placement=placement,
