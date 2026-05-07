@@ -219,10 +219,15 @@ def _sanitise_template(tmpl: Dict) -> Dict:
 
 
 def _find_link(item: Dict, rel: str) -> Optional[str]:
-    """Return the href for the first link whose rel matches, or None."""
-    for link in item.get("links") or []:
-        if link.get("rel") == rel:
-            return link.get("href")
+    """Return the href for the first link whose rel matches, or None.
+
+    The RSpace inventory API uses HAL-style ``_links`` (not ``links``).
+    We check both for resilience.
+    """
+    for key in ("_links", "links"):
+        for link in item.get(key) or []:
+            if link.get("rel") == rel:
+                return link.get("href")
     return None
 
 
@@ -338,7 +343,8 @@ def _export_preview_image(inv, item: Dict, images_dir: Path) -> Optional[str]:
             candidates.append(url)
 
     # Log what links the API returned so users can report unexpected rel names.
-    actual_rels = [lnk.get("rel") for lnk in (item.get("links") or [])]
+    all_links = (item.get("_links") or []) + (item.get("links") or [])
+    actual_rels = [lnk.get("rel") for lnk in all_links]
     if actual_rels:
         err_console.print(f"  [dim]{gid} links: {actual_rels}[/dim]")
 
