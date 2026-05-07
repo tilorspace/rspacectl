@@ -4,25 +4,49 @@ Workflow
 --------
 Export (source server):
 
-    rspace migrate export --all --output snapshot.json
-    rspace migrate export --template IT1 --sample SA2 --output partial.json
+    rspace migrate export --all --output my_snapshot/
+    rspace migrate export --template IT1 --sample SA2 --output partial/
 
 Import (target server, different --profile):
 
+    rspace --profile target migrate import my_snapshot/
+    rspace --profile target migrate import my_snapshot/ --dry-run
+    rspace --profile target migrate import my_snapshot/ --checkpoint my_snapshot/checkpoint.json
+
+    # Backward-compatible: plain JSON snapshot (no attachments)
     rspace --profile target migrate import snapshot.json
-    rspace --profile target migrate import snapshot.json --dry-run
-    rspace --profile target migrate import snapshot.json --checkpoint snapshot.json.checkpoint
 
-Import algorithm (five phases)
+Snapshot folder layout
+-----------------------
+    snapshot_dir/
+      snapshot.json           — inventory data (templates, containers, samples)
+      attachments/
+        SA123/IF456_report.pdf
+        SS234/IF111_cert.pdf
+        IC345/IF222_label.pdf
+        IT12/IF333_data.csv
+      images/
+        SA123_preview.png     — sample / subsample / container preview image
+      icons/
+        IT12_icon.png         — template icon (iconId)
+      image_containers/
+        IC678_background.png  — IMAGE container background image
+        IC678_locations.json  — [{coordX, coordY}] marker positions
+
+Import algorithm (nine phases)
 -------------------------------
-1. Templates   — create flat; record old→new globalId + per-field id mapping
-2. Containers (flat) — create all containers at top level; record old→new globalId
-3. Container hierarchy — move containers into their parents, shallowest depth first
-4. Samples     — create from mapped template; name-match field values; update subsample names/quantities
-5. Subsample placements — move each subsample into its recorded container (exact grid position preserved)
+1. Templates          — create flat; record old→new globalId + per-field id mapping
+2. Containers (flat)  — create all containers at top level; record old→new globalId
+3. Container hierarchy— move containers into their parents, shallowest depth first
+4. Samples            — create from mapped template; restore field values + subsample metadata
+5. Subsample placements — move each subsample into its recorded container
+6. Attachments        — re-upload files to their new owner globalIds
+7. Preview images     — set_image for samples, subsamples, containers
+8. Template icons     — set_sample_template_icon for templates
+9. IMAGE containers   — recreate background image + marker locations
 
-A checkpoint file (<snapshot>.checkpoint) is written after each phase so an
-interrupted import can resume with --checkpoint without duplicating data.
+A checkpoint file is written after each phase so an interrupted import can
+resume with --checkpoint without duplicating already-created resources.
 """
 
 from __future__ import annotations
@@ -43,8 +67,9 @@ from ..output import console, err_console
 
 app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _CHECKPOINT_SUFFIX = ".checkpoint"
+_SNAPSHOT_JSON = "snapshot.json"
 
 # Keys that are server-generated and must be stripped before re-posting
 _RESOURCE_SERVER_KEYS: frozenset = frozenset(
@@ -66,6 +91,44 @@ _RESOURCE_SERVER_KEYS: frozenset = frozenset(
 )
 _FIELD_SERVER_KEYS: frozenset = frozenset({"id", "globalId", "created", "lastModified", "links"})
 _ATTACHMENT_FIELD_TYPES: frozenset = frozenset({"attachment", "file"})
+
+
+# ---------------------------------------------------------------------------
+# Snapshot path helpers
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_dir(output: Path) -> Path:
+    """Return the snapshot directory given --output (always a directory)."""
+    return output
+
+
+def _snapshot_json(snapshot_dir: Path) -> Path:
+    return snapshot_dir / _SNAPSHOT_JSON
+
+
+def _resolve_input(input_path: Path) -> Tuple[Path, Path]:
+    """Return (snapshot_dir, snapshot_json) from either a directory or a .json file."""
+    if input_path.is_dir():
+        return input_path, input_path / _SNAPSHOT_JSON
+    # Legacy: bare .json file
+    return input_path.parent, input_path
+
+
+def _attachments_dir(snapshot_dir: Path) -> Path:
+    return snapshot_dir / "attachments"
+
+
+def _images_dir(snapshot_dir: Path) -> Path:
+    return snapshot_dir / "images"
+
+
+def _icons_dir(snapshot_dir: Path) -> Path:
+    return snapshot_dir / "icons"
+
+
+def _image_containers_dir(snapshot_dir: Path) -> Path:
+    return snapshot_dir / "image_containers"
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +212,176 @@ def _sanitise_template(tmpl: Dict) -> Dict:
     clean["fields"] = [_strip(f, _FIELD_SERVER_KEYS) for f in tmpl.get("fields", [])]
     return clean
 
+
+# ---------------------------------------------------------------------------
+# Link helpers
+# ---------------------------------------------------------------------------
+
+
+def _find_link(item: Dict, rel: str) -> Optional[str]:
+    """Return the href for the first link whose rel matches, or None."""
+    for link in item.get("links") or []:
+        if link.get("rel") == rel:
+            return link.get("href")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Export — file download helpers
+# ---------------------------------------------------------------------------
+
+
+def _export_attachments(inv, item: Dict, item_dir: Path) -> List[Dict]:
+    """Download all attachments for one inventory item into item_dir.
+
+    Returns a list of metadata dicts that will be stored in _migration so the
+    importer knows which files to re-upload.
+    """
+    attachments = item.get("attachments") or item.get("storedFiles") or []
+    if not attachments:
+        return []
+    item_dir.mkdir(parents=True, exist_ok=True)
+    meta = []
+    for att in attachments:
+        att_id = att.get("id") or parse_id(att.get("globalId", ""))
+        if not att_id:
+            continue
+        filename = att.get("name") or f"attachment_{att_id}"
+        local_name = f"{att.get('globalId', att_id)}_{filename}"
+        dest = item_dir / local_name
+        try:
+            inv.download_attachment_by_id(att_id, str(dest))
+            meta.append({"globalId": att.get("globalId"), "filename": filename, "local": local_name})
+        except Exception as exc:
+            warn(f"Could not download attachment {att.get('globalId')} for {item.get('globalId')}: {exc}")
+    return meta
+
+
+def _export_attachment_extra_fields(inv, item: Dict, item_dir: Path) -> List[Dict]:
+    """Download files referenced by attachment-type extraFields.
+
+    Returns a list of {field_name, local} metadata entries.
+    """
+    meta = []
+    for ef in item.get("extraFields") or []:
+        if ef.get("type") not in _ATTACHMENT_FIELD_TYPES:
+            continue
+        content = ef.get("content")
+        if not content:
+            continue
+        # content may be a globalId (IF…) or a numeric id or a URL — try to parse
+        field_name = ef.get("name") or "field"
+        att_id = None
+        if isinstance(content, str) and content.startswith("IF"):
+            att_id = parse_id(content)
+            att_gid = content
+        elif isinstance(content, int):
+            att_id = content
+            att_gid = f"IF{content}"
+        else:
+            warn(
+                f"extraField {field_name!r} on {item.get('globalId')}: "
+                f"unrecognised attachment content {content!r} — skipped."
+            )
+            continue
+        item_dir.mkdir(parents=True, exist_ok=True)
+        local_name = f"ef_{att_gid}_{field_name}"
+        dest = item_dir / local_name
+        try:
+            inv.download_attachment_by_id(att_id, str(dest))
+            meta.append({"field_name": field_name, "globalId": att_gid, "local": local_name})
+        except Exception as exc:
+            warn(
+                f"Could not download extraField attachment {att_gid} "
+                f"({field_name!r}) for {item.get('globalId')}: {exc}"
+            )
+    return meta
+
+
+def _export_preview_image(inv, item: Dict, images_dir: Path) -> Optional[str]:
+    """Download the preview image (rel=image link) for samples, subsamples, containers.
+
+    Returns the local filename relative to images_dir, or None.
+    """
+    href = _find_link(item, "image")
+    if not href:
+        return None
+    gid = item.get("globalId", "unknown")
+    local_name = f"{gid}_preview.png"
+    dest = images_dir / local_name
+    images_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        inv.download_link_to_file(href, str(dest))
+        return local_name
+    except Exception as exc:
+        warn(f"Could not download preview image for {gid}: {exc}")
+        return None
+
+
+def _export_template_icon(inv, tmpl: Dict, icons_dir: Path) -> Optional[str]:
+    """Download a template's icon (iconId). Returns local filename or None."""
+    icon_id = tmpl.get("iconId")
+    tmpl_id = tmpl.get("id")
+    if not icon_id or not tmpl_id:
+        return None
+    gid = tmpl.get("globalId", f"IT{tmpl_id}")
+    local_name = f"{gid}_icon"
+    dest = icons_dir / local_name
+    icons_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        inv.get_sample_template_icon(tmpl_id, icon_id, str(dest))
+        return local_name
+    except Exception as exc:
+        warn(f"Could not download icon for template {gid}: {exc}")
+        return None
+
+
+def _export_image_container(inv, container: Dict, ic_dir: Path) -> Dict:
+    """Download the background image and record marker locations for an IMAGE container.
+
+    Returns a dict {background_local, locations} to store in _migration, or {}.
+    """
+    if container.get("cType") != "IMAGE":
+        return {}
+    gid = container.get("globalId", "unknown")
+    result: Dict[str, Any] = {}
+
+    # Background image — the GET response includes a link with rel=locationsImage
+    # (or rel=image) pointing to the background PNG.
+    for rel in ("locationsImage", "image"):
+        href = _find_link(container, rel)
+        if href:
+            ic_dir.mkdir(parents=True, exist_ok=True)
+            local_name = f"{gid}_background.png"
+            dest = ic_dir / local_name
+            try:
+                inv.download_link_to_file(href, str(dest))
+                result["background_local"] = local_name
+            except Exception as exc:
+                warn(f"Could not download background image for IMAGE container {gid}: {exc}")
+            break
+
+    if "background_local" not in result:
+        warn(
+            f"IMAGE container {gid} ({container.get('name')!r}): "
+            "no background image link found in API response — background will not be migrated."
+        )
+
+    # Marker locations from the locations array
+    locations = []
+    for loc in container.get("locations") or []:
+        x = loc.get("coordX")
+        y = loc.get("coordY")
+        if x is not None and y is not None:
+            locations.append({"coordX": x, "coordY": y})
+    if locations:
+        ic_dir.mkdir(parents=True, exist_ok=True)
+        loc_file = ic_dir / f"{gid}_locations.json"
+        loc_file.write_text(json.dumps(locations))
+        result["locations_local"] = f"{gid}_locations.json"
+        result["locations"] = locations
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +499,7 @@ def _walk_container(
 
 
 def _export_containers(
-    inv, ids: Optional[List[int]] = None
+    inv, ids: Optional[List[int]] = None, warn_attachments: bool = False
 ) -> Tuple[List[Dict], Set[int]]:
     """Walk the container tree from all (or selected) roots.
 
@@ -306,10 +539,10 @@ def _export_containers(
         if has_attachment:
             container_attachment_count += 1
 
-    if container_attachment_count:
+    if warn_attachments and container_attachment_count:
         warn(
             f"{container_attachment_count} container(s) have file attachments — "
-            "attachments are not included in this snapshot. Re-attach files manually after import."
+            "attachments are not included (--no-files was set). Re-attach files manually after import."
         )
 
     return containers, found_sample_ids
@@ -346,6 +579,7 @@ def _collect_subsample_locations(sample: Dict) -> List[Dict]:
 def _export_samples(
     inv,
     ids: Optional[List[int]] = None,
+    warn_attachments: bool = False,
 ) -> Tuple[List[Dict], Set[str]]:
     """Fetch full sample details including embedded subsamples.
 
@@ -398,13 +632,104 @@ def _export_samples(
 
         samples.append(full)
 
-    if attachment_count:
+    if warn_attachments and attachment_count:
         warn(
-            f"{attachment_count} item(s) have file attachments — attachments are not "
-            "included in this snapshot. Re-attach files manually after import."
+            f"{attachment_count} sample/subsample item(s) have file attachments — "
+            "attachments are not included (--no-files was set). Re-attach files manually after import."
         )
 
     return samples, ref_template_gids
+
+
+# ---------------------------------------------------------------------------
+# Export — files phase (runs after data export, modifies _migration in-place)
+# ---------------------------------------------------------------------------
+
+
+def _export_files(
+    inv,
+    templates: List[Dict],
+    containers: List[Dict],
+    samples: List[Dict],
+    snapshot_dir: Path,
+) -> None:
+    """Download all attachments, preview images, icons, and IMAGE container backgrounds.
+
+    Mutates the ``_migration`` dict on each item in-place so the paths are
+    serialised into snapshot.json alongside the inventory data.
+    """
+    att_dir = _attachments_dir(snapshot_dir)
+    img_dir = _images_dir(snapshot_dir)
+    ico_dir = _icons_dir(snapshot_dir)
+    ic_dir = _image_containers_dir(snapshot_dir)
+
+    err_console.print("\n[bold]Exporting files…[/bold]")
+
+    # --- Templates: attachments + icon ---
+    for tmpl in templates:
+        gid = tmpl.get("globalId", "")
+        mig = tmpl.setdefault("_migration", {})
+
+        att_meta = _export_attachments(inv, tmpl, att_dir / gid)
+        ef_meta = _export_attachment_extra_fields(inv, tmpl, att_dir / gid)
+        if att_meta or ef_meta:
+            mig["attachments"] = att_meta
+            mig["attachment_extra_fields"] = ef_meta
+
+        icon_local = _export_template_icon(inv, tmpl, ico_dir)
+        if icon_local:
+            mig["icon_local"] = icon_local
+
+    # --- Containers: attachments + preview image + IMAGE background ---
+    for c in containers:
+        gid = c.get("globalId", "")
+        mig = c.setdefault("_migration", {})
+
+        att_meta = _export_attachments(inv, c, att_dir / gid)
+        ef_meta = _export_attachment_extra_fields(inv, c, att_dir / gid)
+        if att_meta or ef_meta:
+            mig["attachments"] = att_meta
+            mig["attachment_extra_fields"] = ef_meta
+
+        preview_local = _export_preview_image(inv, c, img_dir)
+        if preview_local:
+            mig["preview_local"] = preview_local
+
+        if c.get("cType") == "IMAGE":
+            ic_meta = _export_image_container(inv, c, ic_dir)
+            if ic_meta:
+                mig["image_container"] = ic_meta
+
+    # --- Samples + subsamples: attachments + preview image ---
+    for sample in samples:
+        sa_gid = sample.get("globalId", "")
+        mig = sample.setdefault("_migration", {})
+
+        att_meta = _export_attachments(inv, sample, att_dir / sa_gid)
+        ef_meta = _export_attachment_extra_fields(inv, sample, att_dir / sa_gid)
+        if att_meta or ef_meta:
+            mig["attachments"] = att_meta
+            mig["attachment_extra_fields"] = ef_meta
+
+        preview_local = _export_preview_image(inv, sample, img_dir)
+        if preview_local:
+            mig["preview_local"] = preview_local
+
+        for ss in sample.get("subSamples", []):
+            ss_gid = ss.get("globalId", "")
+            ss_mig = ss.setdefault("_migration", {})
+
+            att_meta = _export_attachments(inv, ss, att_dir / ss_gid)
+            ef_meta = _export_attachment_extra_fields(inv, ss, att_dir / ss_gid)
+            if att_meta or ef_meta:
+                ss_mig["attachments"] = att_meta
+                ss_mig["attachment_extra_fields"] = ef_meta
+
+            preview_local = _export_preview_image(inv, ss, img_dir)
+            if preview_local:
+                ss_mig["preview_local"] = preview_local
+
+    err_console.print("  File export complete.")
 
 
 # ---------------------------------------------------------------------------
@@ -451,12 +776,18 @@ def _import_templates(inv, templates: List[Dict], state: _ImportState, dry_run: 
 
 
 def _import_containers_flat(
-    inv, containers: List[Dict], state: _ImportState, dry_run: bool
+    inv, containers: List[Dict], state: _ImportState, dry_run: bool, snapshot_dir: Path
 ) -> None:
-    """Phase 2 — create all containers at top level (hierarchy restored in Phase 3)."""
+    """Phase 2 — create all containers at top level (hierarchy restored in Phase 3).
+
+    IMAGE containers are now recreated as IMAGE when a background image is present
+    in the snapshot; otherwise they fall back to LIST with a warning.
+    """
     err_console.print(
         f"\n[bold]Phase 2[/bold] — creating {len(containers)} container(s) (flat)…"
     )
+    ic_dir = _image_containers_dir(snapshot_dir)
+
     for c in containers:
         old_gid = c["globalId"]
 
@@ -478,16 +809,6 @@ def _import_containers_flat(
             can_containers = c.get("canStoreContainers", True)
             extra_fields = c.get("extraFields") or []
 
-            if ctype == "IMAGE":
-                # IMAGE containers use a background image with custom marker
-                # positions that cannot be reproduced from the snapshot — recreate
-                # as a LIST container and warn so the user can restore manually.
-                warn(
-                    f"Container {old_gid} ({c['name']!r}) is an IMAGE container. "
-                    "Image containers cannot be fully migrated (background image and "
-                    "marker positions are lost). It will be recreated as a LIST container."
-                )
-
             if ctype == "GRID":
                 layout = c.get("gridLayout") or {}
                 new_c = inv.create_grid_container(
@@ -500,8 +821,41 @@ def _import_containers_flat(
                     can_store_samples=can_samples,
                     can_store_containers=can_containers,
                 )
+            elif ctype == "IMAGE":
+                ic_meta = (c.get("_migration") or {}).get("image_container") or {}
+                bg_local = ic_meta.get("background_local")
+                bg_path = ic_dir / bg_local if bg_local else None
+
+                if bg_path and bg_path.exists():
+                    from rspace_client.inv.inv import ImageContainerPost
+                    locations = ic_meta.get("locations") or []
+                    location_tuples = [(loc["coordX"], loc["coordY"]) for loc in locations]
+                    post = ImageContainerPost(
+                        name=c["name"],
+                        image_file=str(bg_path),
+                        locations=location_tuples,
+                        tags=tags,
+                        description=desc,
+                        extra_fields=extra_fields,
+                        can_store_containers=can_containers,
+                        can_store_samples=can_samples,
+                    )
+                    new_c = inv.create_image_container(post)
+                else:
+                    warn(
+                        f"Container {old_gid} ({c['name']!r}) is an IMAGE container but "
+                        "no background image was found in the snapshot — "
+                        "recreating as a LIST container."
+                    )
+                    new_c = inv.create_list_container(
+                        name=c["name"],
+                        tags=tags,
+                        description=desc,
+                        extra_fields=extra_fields,
+                        can_store_samples=can_samples,
+                        can_store_containers=can_containers,
+                    )
             else:
-                # Covers LIST and IMAGE (IMAGE recreated as LIST with a warning above)
                 new_c = inv.create_list_container(
                     name=c["name"],
                     tags=tags,
@@ -898,6 +1252,191 @@ def _import_subsample_placements(
         )
 
 
+def _import_attachments(
+    inv,
+    templates: List[Dict],
+    containers: List[Dict],
+    samples: List[Dict],
+    state: _ImportState,
+    dry_run: bool,
+    snapshot_dir: Path,
+) -> None:
+    """Phase 6 — re-upload attachments to their new owner globalIds."""
+    att_dir = _attachments_dir(snapshot_dir)
+    if not att_dir.exists():
+        err_console.print("\n[bold]Phase 6[/bold] — no attachments directory; skipping.")
+        return
+
+    all_items: List[Tuple[str, Dict]] = (
+        [(t["globalId"], t) for t in templates]
+        + [(c["globalId"], c) for c in containers]
+        + [(s["globalId"], s) for s in samples]
+        + [
+            (ss["globalId"], ss)
+            for s in samples
+            for ss in s.get("subSamples", [])
+        ]
+    )
+
+    total = sum(
+        len((item.get("_migration") or {}).get("attachments") or [])
+        for _, item in all_items
+    )
+    if total == 0:
+        err_console.print("\n[bold]Phase 6[/bold] — no attachments to restore.")
+        return
+
+    err_console.print(f"\n[bold]Phase 6[/bold] — restoring {total} attachment(s)…")
+
+    for old_gid, item in all_items:
+        mig = item.get("_migration") or {}
+        att_list = mig.get("attachments") or []
+        if not att_list:
+            continue
+
+        new_gid = state.id_map.get(old_gid, old_gid if dry_run else None)
+        if not new_gid:
+            _record_error(state, f"Attachments for {old_gid}: not in id_map — skipped")
+            continue
+
+        item_att_dir = att_dir / old_gid
+        for att in att_list:
+            local_name = att.get("local")
+            filename = att.get("filename", local_name)
+            src = item_att_dir / local_name if local_name else None
+            if not src or not src.exists():
+                warn(f"Attachment file missing: {src} — skipped")
+                continue
+            if dry_run:
+                console.print(
+                    f"  [dim]DRY RUN[/dim]  would upload {filename!r} → [cyan]{new_gid}[/cyan]"
+                )
+                continue
+            try:
+                with open(src, "rb") as fh:
+                    inv.upload_attachment(new_gid, fh)
+                console.print(
+                    f"  [green]✓[/green]  {filename!r} → [cyan]{new_gid}[/cyan]"
+                )
+            except Exception as exc:
+                _record_error(state, f"Attachment {filename!r} for {old_gid}: {exc}")
+
+
+def _import_preview_images(
+    inv,
+    containers: List[Dict],
+    samples: List[Dict],
+    state: _ImportState,
+    dry_run: bool,
+    snapshot_dir: Path,
+) -> None:
+    """Phase 7 — set preview images for samples, subsamples, and containers."""
+    img_dir = _images_dir(snapshot_dir)
+    if not img_dir.exists():
+        err_console.print("\n[bold]Phase 7[/bold] — no images directory; skipping.")
+        return
+
+    all_items: List[Tuple[str, Dict]] = (
+        [(c["globalId"], c) for c in containers]
+        + [(s["globalId"], s) for s in samples]
+        + [
+            (ss["globalId"], ss)
+            for s in samples
+            for ss in s.get("subSamples", [])
+        ]
+    )
+
+    total = sum(
+        1 for _, item in all_items if (item.get("_migration") or {}).get("preview_local")
+    )
+    if total == 0:
+        err_console.print("\n[bold]Phase 7[/bold] — no preview images to restore.")
+        return
+
+    err_console.print(f"\n[bold]Phase 7[/bold] — restoring {total} preview image(s)…")
+
+    for old_gid, item in all_items:
+        mig = item.get("_migration") or {}
+        preview_local = mig.get("preview_local")
+        if not preview_local:
+            continue
+
+        new_gid = state.id_map.get(old_gid, old_gid if dry_run else None)
+        if not new_gid:
+            _record_error(state, f"Preview image for {old_gid}: not in id_map — skipped")
+            continue
+
+        src = img_dir / preview_local
+        if not src.exists():
+            warn(f"Preview image file missing: {src} — skipped")
+            continue
+
+        if dry_run:
+            console.print(
+                f"  [dim]DRY RUN[/dim]  would set image for [cyan]{new_gid}[/cyan]"
+            )
+            continue
+
+        try:
+            with open(src, "rb") as fh:
+                inv.set_image(new_gid, fh)
+            console.print(f"  [green]✓[/green]  preview image → [cyan]{new_gid}[/cyan]")
+        except Exception as exc:
+            _record_error(state, f"Preview image for {old_gid}: {exc}")
+
+
+def _import_template_icons(
+    inv,
+    templates: List[Dict],
+    state: _ImportState,
+    dry_run: bool,
+    snapshot_dir: Path,
+) -> None:
+    """Phase 8 — set icons for templates."""
+    ico_dir = _icons_dir(snapshot_dir)
+    if not ico_dir.exists():
+        err_console.print("\n[bold]Phase 8[/bold] — no icons directory; skipping.")
+        return
+
+    total = sum(1 for t in templates if (t.get("_migration") or {}).get("icon_local"))
+    if total == 0:
+        err_console.print("\n[bold]Phase 8[/bold] — no template icons to restore.")
+        return
+
+    err_console.print(f"\n[bold]Phase 8[/bold] — restoring {total} template icon(s)…")
+
+    for tmpl in templates:
+        mig = tmpl.get("_migration") or {}
+        icon_local = mig.get("icon_local")
+        if not icon_local:
+            continue
+
+        old_gid = tmpl["globalId"]
+        new_gid = state.id_map.get(old_gid, old_gid if dry_run else None)
+        if not new_gid:
+            _record_error(state, f"Template icon for {old_gid}: not in id_map — skipped")
+            continue
+        new_tmpl_id = parse_id(new_gid)
+
+        src = ico_dir / icon_local
+        if not src.exists():
+            warn(f"Template icon file missing: {src} — skipped")
+            continue
+
+        if dry_run:
+            console.print(
+                f"  [dim]DRY RUN[/dim]  would set icon for template [cyan]{new_gid}[/cyan]"
+            )
+            continue
+
+        try:
+            with open(src, "rb") as fh:
+                inv.set_sample_template_icon(new_tmpl_id, fh)
+            console.print(f"  [green]✓[/green]  icon → template [cyan]{new_gid}[/cyan]")
+        except Exception as exc:
+            _record_error(state, f"Template icon for {old_gid}: {exc}")
+
+
 def _record_error(state: _ImportState, message: str) -> None:
     warn(message)
     state.errors.append(message)
@@ -910,7 +1449,7 @@ def _record_error(state: _ImportState, message: str) -> None:
 
 @app.command("export")
 def migrate_export(
-    output: Path = typer.Option(..., "--output", "-o", help="Output snapshot file (JSON)."),
+    output: Path = typer.Option(..., "--output", "-o", help="Output snapshot directory."),
     all_resources: bool = typer.Option(False, "--all", help="Export all inventory resources."),
     template_ids: Optional[List[str]] = typer.Option(
         None,
@@ -930,20 +1469,27 @@ def migrate_export(
         help="Sample GlobalID(s) to export (referenced templates auto-included).",
         metavar="GLOBAL_ID",
     ),
+    no_files: bool = typer.Option(
+        False,
+        "--no-files",
+        help="Skip downloading attachments, preview images, and icons (data only).",
+    ),
 ) -> None:
-    """Export inventory to a local snapshot file for migration.
+    """Export inventory to a local snapshot directory for migration.
 
-    The snapshot is a self-contained JSON file capturing templates,
-    containers (full hierarchy), samples and their subsample locations.
-    It can be imported to any RSpace server with 'rspace migrate import'.
+    The snapshot is a directory containing snapshot.json (inventory data) and
+    sub-directories for attachments, preview images, template icons, and
+    IMAGE container backgrounds.  Import it with 'rspace migrate import'.
 
     Examples:
 
-      rspace migrate export --all --output full_snapshot.json
+      rspace migrate export --all --output full_snapshot/
 
-      rspace migrate export --template IT123 --sample SA456 --output partial.json
+      rspace migrate export --template IT123 --sample SA456 --output partial/
 
-      rspace migrate export --container IC789 --output freezer_a.json
+      rspace migrate export --container IC789 --output freezer_a/
+
+      rspace migrate export --all --output data_only/ --no-files
     """
     if not any([all_resources, template_ids, container_ids, sample_ids]):
         err_console.print(
@@ -951,6 +1497,9 @@ def migrate_export(
             "--template / --container / --sample.[/red]"
         )
         raise typer.Exit(1)
+
+    snapshot_dir = _snapshot_dir(output)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     ctx = get_context()
     inv = ctx.inv
@@ -995,7 +1544,7 @@ def migrate_export(
         )
         err_console.print("[bold]Exporting containers…[/bold]")
         try:
-            blob["containers"], container_found_sample_ids = _export_containers(inv, ids=c_ids)
+            blob["containers"], container_found_sample_ids = _export_containers(inv, ids=c_ids, warn_attachments=no_files)
         except Exception as exc:
             err_console.print(f"[red]Export failed (containers): {exc}[/red]")
             raise typer.Exit(1)
@@ -1028,7 +1577,7 @@ def migrate_export(
         if not container_found_sample_ids or sample_ids:
             err_console.print("[bold]Exporting samples…[/bold]")
         try:
-            samples, ref_tmpl_gids = _export_samples(inv, ids=s_ids)
+            samples, ref_tmpl_gids = _export_samples(inv, ids=s_ids, warn_attachments=no_files)
             blob["samples"] = samples
 
             # Auto-include any templates referenced by selected samples
@@ -1046,9 +1595,24 @@ def migrate_export(
             raise typer.Exit(1)
         console.print(f"  Collected [green]{len(blob['samples'])}[/green] sample(s).")
 
+    # ---- Files (attachments, images, icons) ------------------------------
+    if not no_files:
+        try:
+            _export_files(
+                inv,
+                blob["templates"],
+                blob["containers"],
+                blob["samples"],
+                snapshot_dir,
+            )
+        except Exception as exc:
+            err_console.print(f"[red]File export error: {exc}[/red]")
+            # Non-fatal: the JSON snapshot is still written
+
     # ---- Write blob ------------------------------------------------------
-    output.write_text(json.dumps(blob, indent=2, default=str))
-    console.print(f"\n[green]Snapshot written to:[/green] {output}")
+    json_path = _snapshot_json(snapshot_dir)
+    json_path.write_text(json.dumps(blob, indent=2, default=str))
+    console.print(f"\n[green]Snapshot written to:[/green] {snapshot_dir}/")
     console.print(
         f"  Templates: [green]{len(blob['templates'])}[/green]  "
         f"Containers: [green]{len(blob['containers'])}[/green]  "
@@ -1058,8 +1622,8 @@ def migrate_export(
 
 @app.command("import")
 def migrate_import(
-    input_file: Path = typer.Argument(
-        ..., help="Snapshot file produced by 'rspace migrate export'."
+    input_path: Path = typer.Argument(
+        ..., help="Snapshot directory (or legacy .json file) produced by 'rspace migrate export'."
     ),
     dry_run: bool = typer.Option(
         False,
@@ -1071,42 +1635,47 @@ def migrate_import(
         "--checkpoint",
         help=(
             "Checkpoint file to resume an interrupted import. "
-            "Defaults to <snapshot>.checkpoint alongside the input file."
+            "Defaults to <snapshot_dir>/checkpoint.json."
         ),
     ),
     skip_templates: bool = typer.Option(False, "--skip-templates", help="Skip Phase 1."),
     skip_containers: bool = typer.Option(False, "--skip-containers", help="Skip Phases 2 & 3."),
     skip_samples: bool = typer.Option(False, "--skip-samples", help="Skip Phases 4 & 5."),
+    skip_files: bool = typer.Option(False, "--skip-files", help="Skip Phases 6–8 (attachments, images, icons)."),
 ) -> None:
     """Import an inventory snapshot to the current RSpace server.
 
-    Recreates templates, containers (preserving hierarchy), samples, and
-    subsample container placements in five ordered phases.  A checkpoint file
-    is written after each phase so a failed import can be resumed with
-    --checkpoint without duplicating already-created resources.
+    Accepts a snapshot directory produced by 'rspace migrate export', or a
+    legacy plain JSON snapshot file (no attachments will be restored in that case).
+
+    Recreates templates, containers, samples, subsample placements, attachments,
+    preview images, and template icons in nine ordered phases.  A checkpoint file
+    is written after each phase so a failed import can be resumed with --checkpoint.
 
     To migrate between servers:
 
       # 1. Export from source
-      rspace --profile source migrate export --all --output snap.json
+      rspace --profile source migrate export --all --output snap/
 
       # 2. Import to target
-      rspace --profile target migrate import snap.json
+      rspace --profile target migrate import snap/
 
     Examples:
 
-      rspace migrate import snap.json --dry-run
+      rspace migrate import snap/ --dry-run
 
-      rspace migrate import snap.json
+      rspace migrate import snap/
 
-      rspace migrate import snap.json --checkpoint snap.json.checkpoint
+      rspace migrate import snap/ --checkpoint snap/checkpoint.json
     """
-    if not input_file.exists():
-        err_console.print(f"[red]File not found:[/red] {input_file}")
+    snapshot_dir, json_path = _resolve_input(input_path)
+
+    if not json_path.exists():
+        err_console.print(f"[red]Snapshot JSON not found:[/red] {json_path}")
         raise typer.Exit(1)
 
     try:
-        blob = json.loads(input_file.read_text())
+        blob = json.loads(json_path.read_text())
     except json.JSONDecodeError as exc:
         err_console.print(f"[red]Invalid JSON in snapshot:[/red] {exc}")
         raise typer.Exit(1)
@@ -1138,7 +1707,7 @@ def migrate_import(
 
     # Resolve / load checkpoint
     if checkpoint_file is None:
-        checkpoint_file = input_file.with_suffix(input_file.suffix + _CHECKPOINT_SUFFIX)
+        checkpoint_file = snapshot_dir / "checkpoint.json"
 
     if checkpoint_file.exists():
         state = _load_checkpoint(checkpoint_file)
@@ -1163,7 +1732,7 @@ def migrate_import(
 
     # ---- Phase 2: Containers (flat) ------------------------------------
     if not skip_containers and "containers_flat" not in state.completed_phases:
-        _import_containers_flat(inv, containers, state, dry_run)
+        _import_containers_flat(inv, containers, state, dry_run, snapshot_dir)
         if not dry_run:
             state.completed_phases.append("containers_flat")
             _save_checkpoint(checkpoint_file, state)
@@ -1196,6 +1765,33 @@ def migrate_import(
             _save_checkpoint(checkpoint_file, state)
     else:
         err_console.print("\n[dim]Phase 5 (subsample placements) — skipped.[/dim]")
+
+    # ---- Phase 6: Attachments ------------------------------------------
+    if not skip_files and "attachments" not in state.completed_phases:
+        _import_attachments(inv, templates, containers, samples, state, dry_run, snapshot_dir)
+        if not dry_run:
+            state.completed_phases.append("attachments")
+            _save_checkpoint(checkpoint_file, state)
+    else:
+        err_console.print("\n[dim]Phase 6 (attachments) — skipped.[/dim]")
+
+    # ---- Phase 7: Preview images ---------------------------------------
+    if not skip_files and "preview_images" not in state.completed_phases:
+        _import_preview_images(inv, containers, samples, state, dry_run, snapshot_dir)
+        if not dry_run:
+            state.completed_phases.append("preview_images")
+            _save_checkpoint(checkpoint_file, state)
+    else:
+        err_console.print("\n[dim]Phase 7 (preview images) — skipped.[/dim]")
+
+    # ---- Phase 8: Template icons ----------------------------------------
+    if not skip_files and "template_icons" not in state.completed_phases:
+        _import_template_icons(inv, templates, state, dry_run, snapshot_dir)
+        if not dry_run:
+            state.completed_phases.append("template_icons")
+            _save_checkpoint(checkpoint_file, state)
+    else:
+        err_console.print("\n[dim]Phase 8 (template icons) — skipped.[/dim]")
 
     # ---- Summary -------------------------------------------------------
     console.print("\n" + "─" * 60)
