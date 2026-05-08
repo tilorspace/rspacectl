@@ -1322,6 +1322,27 @@ def _import_subsample_placements(
         )
 
 
+def _all_items_with_globalid(
+    templates: List[Dict],
+    containers: List[Dict],
+    samples: List[Dict],
+) -> List[Tuple[str, Dict]]:
+    """Flatten templates + containers + samples (incl. subsamples) into
+    ``(globalId, item)`` pairs.  Used by phases 6/7/8 which iterate over
+    every inventory object that might carry per-item migration metadata.
+    """
+    return (
+        [(t["globalId"], t) for t in templates]
+        + [(c["globalId"], c) for c in containers]
+        + [(s["globalId"], s) for s in samples]
+        + [
+            (ss["globalId"], ss)
+            for s in samples
+            for ss in s.get("subSamples", [])
+        ]
+    )
+
+
 def _import_attachments(
     inv,
     templates: List[Dict],
@@ -1337,16 +1358,7 @@ def _import_attachments(
         err_console.print("\n[bold]Phase 6[/bold] — no attachments directory; skipping.")
         return
 
-    all_items: List[Tuple[str, Dict]] = (
-        [(t["globalId"], t) for t in templates]
-        + [(c["globalId"], c) for c in containers]
-        + [(s["globalId"], s) for s in samples]
-        + [
-            (ss["globalId"], ss)
-            for s in samples
-            for ss in s.get("subSamples", [])
-        ]
-    )
+    all_items = _all_items_with_globalid(templates, containers, samples)
 
     total = sum(
         len((item.get("_migration") or {}).get("attachments") or [])
@@ -1406,16 +1418,7 @@ def _import_preview_images(
         err_console.print("\n[bold]Phase 7[/bold] — no images directory; skipping.")
         return
 
-    all_items: List[Tuple[str, Dict]] = (
-        [(t["globalId"], t) for t in templates]
-        + [(c["globalId"], c) for c in containers]
-        + [(s["globalId"], s) for s in samples]
-        + [
-            (ss["globalId"], ss)
-            for s in samples
-            for ss in s.get("subSamples", [])
-        ]
-    )
+    all_items = _all_items_with_globalid(templates, containers, samples)
 
     total = sum(
         1 for _, item in all_items if (item.get("_migration") or {}).get("preview_local")
@@ -1681,12 +1684,12 @@ def migrate_export(
     json_path.write_text(json.dumps(blob, indent=2, default=str))
 
     # Tally file export stats from the _migration dicts written by _export_files.
-    all_items = (
-        blob["templates"]
-        + blob["containers"]
-        + blob["samples"]
-        + [ss for s in blob["samples"] for ss in s.get("subSamples", [])]
-    )
+    all_items = [
+        item
+        for _, item in _all_items_with_globalid(
+            blob["templates"], blob["containers"], blob["samples"]
+        )
+    ]
     n_attachments = sum(
         len((item.get("_migration") or {}).get("attachments") or [])
         for item in all_items
