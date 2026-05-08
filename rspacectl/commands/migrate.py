@@ -182,6 +182,22 @@ def _record_error(state: _ImportState, message: str) -> None:
     state.errors.append(message)
 
 
+def _resolve_new_gid(
+    old_gid: str, state: _ImportState, kind: str
+) -> Optional[str]:
+    """Return the new globalId for an old one, or None if unmapped.
+
+    Records a state error on miss.  In dry-run mode the caller normally
+    populates ``state.id_map`` with identity mappings during earlier phases,
+    so a miss here means the user skipped a prerequisite phase.
+    """
+    new_gid = state.id_map.get(old_gid)
+    if not new_gid:
+        _record_error(state, f"{kind} for {old_gid}: not in id_map — skipped")
+        return None
+    return new_gid
+
+
 # Module-level export warning collector.  Reset at the start of each export
 # so the final summary can tally any download failures.  Module-level state is
 # acceptable here because each CLI invocation runs a single command in its own
@@ -1347,9 +1363,8 @@ def _import_attachments(
         if not att_list:
             continue
 
-        new_gid = state.id_map.get(old_gid, old_gid if dry_run else None)
+        new_gid = _resolve_new_gid(old_gid, state, "Attachments")
         if not new_gid:
-            _record_error(state, f"Attachments for {old_gid}: not in id_map — skipped")
             continue
 
         item_att_dir = att_dir / old_gid
@@ -1416,9 +1431,8 @@ def _import_preview_images(
         if not preview_local:
             continue
 
-        new_gid = state.id_map.get(old_gid, old_gid if dry_run else None)
+        new_gid = _resolve_new_gid(old_gid, state, "Preview image")
         if not new_gid:
-            _record_error(state, f"Preview image for {old_gid}: not in id_map — skipped")
             continue
 
         src = img_dir / preview_local
@@ -1467,9 +1481,8 @@ def _import_template_icons(
             continue
 
         old_gid = tmpl["globalId"]
-        new_gid = state.id_map.get(old_gid, old_gid if dry_run else None)
+        new_gid = _resolve_new_gid(old_gid, state, "Template icon")
         if not new_gid:
-            _record_error(state, f"Template icon for {old_gid}: not in id_map — skipped")
             continue
         new_tmpl_id = parse_id(new_gid)
 
