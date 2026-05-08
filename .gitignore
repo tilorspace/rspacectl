@@ -62,3 +62,8 @@ Thumbs.db
 # Distribution
 *.tar.gz
 *.whl
+
+# Local migrate test data (snapshots, logs)
+testmigration*/
+my_snapshot/
+*.log
