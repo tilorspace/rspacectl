@@ -11,6 +11,7 @@ A command-line interface for [RSpace](https://www.researchspace.com/) covering b
 - **Full Inventory coverage** — samples, subsamples, containers, templates, workbenches
 - **Smart `get` command** — infers resource type from GlobalID prefix (`SD`, `SA`, `SS`, `IC`, …)
 - **Tagging** — set tags on any resource type with a single `rspace tag` command
+- **Inventory snapshots** — `rspace migrate export` / `import` to move whole inventories, individual containers (with full subtree), templates, or samples between RSpace instances. Preserves attachments, preview images, IMAGE-container backgrounds, and the container hierarchy.
 - **Multiple output formats** — rich tables (default), JSON, CSV, quiet (IDs only, for piping)
 - **Pagination** — all list commands support `--page` / `--page-size` with a result footer
 - **Named profiles** — manage multiple RSpace instances with `--profile`
@@ -320,7 +321,7 @@ rspace upload attachment ./spec.pdf SS101
 rspace download file GL606 --output-dir ./downloads
 
 # Download an inventory attachment
-rspace download attachment GL707 --output-dir ./downloads
+rspace download attachment IF707 --output-dir ./downloads
 ```
 
 ---
@@ -361,20 +362,101 @@ rspace import tree  ./my-lab-data --folder FL123
 
 ---
 
+### `migrate` — copy inventory data between servers (full or selective)
+
+Take a snapshot of inventory on one server and recreate it on another. Useful for:
+
+- **Selective transfers** — copy a freezer rack and its samples to a collaborator's instance, share a curated set of templates with a sister lab, or seed a test server with realistic data
+- **Full migrations** — move everything when consolidating instances or upgrading
+- **Snapshots** — keep a local file-system copy of an inventory subtree
+
+Templates, containers (full hierarchy), samples, subsamples, attachments, preview images, template icons, and IMAGE-container backgrounds with marker locations are all preserved.
+
+```bash
+# Selective: a single container and everything inside it
+rspace --profile source migrate export --container IC123 --output ./freezer_a
+rspace --profile target migrate import  ./freezer_a
+
+# Selective: pick specific templates and samples (referenced templates auto-included)
+rspace --profile source migrate export --template IT5 --sample SA42 --output ./partial
+
+# Multiple selectors compose
+rspace --profile source migrate export \
+    --container IC100 --container IC200 --template IT5 \
+    --output ./teams_handoff
+
+# Full inventory
+rspace --profile source migrate export --all --output ./full_snapshot
+rspace --profile target migrate import  ./full_snapshot
+
+# Preview an import without making any changes
+rspace --profile target migrate import ./freezer_a --dry-run
+```
+
+When you select a container, the entire subtree (sub-containers, subsamples, and the parent samples those subsamples belong to) is included automatically. When you select samples, the templates they depend on are pulled in too.
+
+#### Snapshot folder layout
+
+```
+my_snapshot/
+  snapshot.json           inventory data (templates, containers, samples)
+  attachments/SA123/...   per-item file attachments
+  images/SA123_preview.png  preview images for samples / subsamples / containers / templates
+  icons/IT12_icon         template icons
+  image_containers/       IMAGE-container backgrounds + marker positions
+  checkpoint.json         created during import; auto-deleted on success
+```
+
+#### Eight-phase import
+
+The importer runs in ordered phases, writing a checkpoint after each so an interrupted run can resume cleanly:
+
+1. **Templates** — created with id-mapping recorded
+2. **Containers (flat)** — all containers created at the top level (IMAGE containers get their background image + markers via a separate PUT)
+3. **Container hierarchy** — containers moved into their parents
+4. **Samples** — created from the mapped template; field values, tags, subsample names, quantities, notes restored
+5. **Subsample placements** — subsamples moved to their original containers (grid coords for GRID, marker index for IMAGE)
+6. **Attachments** — files re-uploaded to their new owner globalIds
+7. **Preview images** — `set_image` called for templates / samples / subsamples / containers (default thumbnails are deduplicated)
+8. **Template icons** — `set_sample_template_icon` called per template
+
+```bash
+# Resume an interrupted import
+rspace migrate import ./freezer_a --checkpoint ./freezer_a/checkpoint.json
+
+# Skip phases (e.g. data-only, no files)
+rspace migrate import ./freezer_a --skip-files
+rspace migrate import ./freezer_a --skip-templates --skip-containers
+
+# Data-only export (no attachments / images / icons)
+rspace migrate export --container IC123 --output ./data_only --no-files
+```
+
+#### Notes
+
+- **`--output` semantics differ from other commands**: in `migrate export`, `--output` is the snapshot *directory* (not an output format). The `-o` / `--output` table/json/csv/quiet flag does not apply.
+- **Workbench items** (`BE` prefix) cannot be migrated — workbenches are per-user. Subsamples on a source workbench are reported and remain unplaced after import.
+- **Selecting a container pulls its full subtree.** Sub-containers, subsamples, and the parent samples those subsamples belong to are auto-included so the imported subtree is internally consistent.
+- **Backward compat**: legacy plain-JSON snapshots produced before the directory format are still importable via `rspace migrate import old_snapshot.json` (no attachments will be restored).
+- **Default thumbnails are skipped**: RSpace's content-addressed image storage reuses the same hash for every item without a custom preview, so the migrator deduplicates these to avoid re-uploading hundreds of identical placeholders.
+
+---
+
 ## GlobalID prefixes
 
-| Prefix | Resource type   |
-|--------|-----------------|
-| `SD`   | Document        |
-| `NB`   | Notebook        |
-| `FL`   | Folder          |
-| `SA`   | Sample          |
-| `SS`   | Subsample       |
-| `IC`   | Container       |
-| `IT`   | Sample template |
-| `FM`   | Form            |
-| `GL`   | Gallery file    |
-| `BE`   | Workbench       |
+| Prefix | Resource type               |
+|--------|-----------------------------|
+| `SD`   | Document                    |
+| `NB`   | Notebook                    |
+| `FL`   | Folder                      |
+| `SA`   | Sample                      |
+| `SS`   | Subsample                   |
+| `IC`   | Container                   |
+| `IT`   | Sample template             |
+| `IF`   | Inventory file (attachment) |
+| `FM`   | Form                        |
+| `GL`   | Gallery file                |
+| `BE`   | Workbench                   |
 
 ---
 
