@@ -33,17 +33,18 @@ Snapshot folder layout
         IC678_background.png  — IMAGE container background image
         IC678_locations.json  — [{coordX, coordY}] marker positions
 
-Import algorithm (nine phases)
--------------------------------
+Import algorithm (eight phases)
+--------------------------------
 1. Templates          — create flat; record old→new globalId + per-field id mapping
-2. Containers (flat)  — create all containers at top level; record old→new globalId
+2. Containers (flat)  — create all containers at top level; record old→new globalId.
+                        IMAGE containers are recreated with their background image
+                        and marker locations when those are present in the snapshot.
 3. Container hierarchy— move containers into their parents, shallowest depth first
 4. Samples            — create from mapped template; restore field values + subsample metadata
 5. Subsample placements — move each subsample into its recorded container
 6. Attachments        — re-upload files to their new owner globalIds
-7. Preview images     — set_image for samples, subsamples, containers
+7. Preview images     — set_image for templates, samples, subsamples, containers
 8. Template icons     — set_sample_template_icon for templates
-9. IMAGE containers   — recreate background image + marker locations
 
 A checkpoint file is written after each phase so an interrupted import can
 resume with --checkpoint without duplicating already-created resources.
@@ -1758,7 +1759,7 @@ def migrate_import(
     legacy plain JSON snapshot file (no attachments will be restored in that case).
 
     Recreates templates, containers, samples, subsample placements, attachments,
-    preview images, and template icons in nine ordered phases.  A checkpoint file
+    preview images, and template icons in eight ordered phases.  A checkpoint file
     is written after each phase so a failed import can be resumed with --checkpoint.
 
     To migrate between servers:
