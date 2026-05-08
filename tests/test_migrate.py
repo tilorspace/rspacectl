@@ -236,6 +236,47 @@ class TestCreationFieldsFromState:
         assert out == [{"id": 200}]
 
 
+class TestDeriveTotalQuantity:
+    def test_uses_sample_quantity_when_present(self):
+        sample = {"quantity": {"numericValue": 50.0, "unitId": 1}}
+        q = migrate._derive_total_quantity(sample)
+        assert q is not None
+        assert q._toDict() == {"numericValue": 50.0, "unitId": 1}
+
+    def test_falls_back_to_summing_subsamples(self):
+        sample = {
+            "subSamples": [
+                {"quantity": {"numericValue": 5.0, "unitId": 1}},
+                {"quantity": {"numericValue": 7.0, "unitId": 1}},
+            ]
+        }
+        q = migrate._derive_total_quantity(sample)
+        assert q._toDict() == {"numericValue": 12.0, "unitId": 1}
+
+    def test_skips_subsamples_with_different_unit(self):
+        # Only matching-unit subsamples contribute to the sum.
+        sample = {
+            "subSamples": [
+                {"quantity": {"numericValue": 5.0, "unitId": 1}},
+                {"quantity": {"numericValue": 7.0, "unitId": 3}},  # different unit
+            ]
+        }
+        q = migrate._derive_total_quantity(sample)
+        assert q._toDict() == {"numericValue": 5.0, "unitId": 1}
+
+    def test_returns_none_when_no_quantity(self):
+        assert migrate._derive_total_quantity({}) is None
+        assert migrate._derive_total_quantity({"subSamples": []}) is None
+        assert migrate._derive_total_quantity({"subSamples": [{"name": "x"}]}) is None
+
+    def test_uses_default_value_when_zero(self):
+        # API may reject zero totals — fall back to 1.0 to keep create successful.
+        sample = {"subSamples": [{"quantity": {"numericValue": 0.0, "unitId": 1}}]}
+        q = migrate._derive_total_quantity(sample)
+        assert q._toDict()["numericValue"] == 1.0
+        assert q._toDict()["unitId"] == 1
+
+
 class TestCollectSubsampleLocations:
     def test_grid_parent_records_coords(self):
         sample = {

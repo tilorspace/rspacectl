@@ -306,6 +306,49 @@ def _build_tmpl_field_name_map(templates: List[Dict]) -> Dict[str, Dict[str, str
     return result
 
 
+def _derive_total_quantity(sample: Dict):
+    """Return a ``Quantity`` to seed the new sample's unit dimension, or None.
+
+    RSpace's ``create_sample`` accepts a ``total_quantity`` (a SDK ``Quantity``
+    object) which determines the unit dimension all subsamples inherit.  Once
+    set, individual subsample quantities can only be updated within the same
+    dimension (e.g. ml ↔ l, but not ml → g).  Without this, the new sample
+    falls back to the template's default unit and per-subsample quantity
+    updates fail with 422 "Incoming unit X is incompatible with stored unit Y".
+
+    Strategy:
+    1. Prefer the source sample's own ``quantity`` (the API-reported total).
+    2. Otherwise compute ``sum(numericValue) for subsamples sharing a unitId``,
+       picking the unit of the first quantity-bearing subsample.
+
+    Returns None when the source has no quantity information at all.
+    """
+    sample_qty = sample.get("quantity")
+    if sample_qty and sample_qty.get("unitId") is not None:
+        from rspace_client.inv.inv import Quantity
+        return Quantity(
+            sample_qty.get("numericValue") or 0.0,
+            {"id": sample_qty["unitId"]},
+        )
+
+    # Fall back to summing matching-unit subsample quantities.
+    for old_ss in sample.get("subSamples", []):
+        qty = old_ss.get("quantity") or {}
+        unit_id = qty.get("unitId")
+        if unit_id is None:
+            continue
+        total_value = sum(
+            (ss.get("quantity") or {}).get("numericValue") or 0.0
+            for ss in sample.get("subSamples", [])
+            if (ss.get("quantity") or {}).get("unitId") == unit_id
+        )
+        from rspace_client.inv.inv import Quantity
+        # Use a non-zero default so RSpace doesn't reject the create payload.
+        return Quantity(total_value or 1.0, {"id": unit_id})
+
+    return None
+
+
 def _creation_fields_from_state(
     old_fields: List[Dict],
     old_tmpl_gid: str,
@@ -411,6 +454,10 @@ def _import_samples(
                     old_fields, old_tmpl_gid, tmpl_field_name_map, state
                 )
 
+            # Seed the unit dimension from the source so per-subsample quantity
+            # updates in _restore_subsample don't fail with 422 (unit mismatch).
+            total_quantity = _derive_total_quantity(sample)
+
             new_sample = inv.create_sample(
                 name=sample["name"],
                 tags=sample.get("tags") or [],
@@ -418,6 +465,7 @@ def _import_samples(
                 sample_template_id=new_tmpl_id,
                 subsample_count=max(len(old_subsamples), 1),
                 fields=creation_fields,
+                total_quantity=total_quantity,
             )
             new_sa_gid = new_sample["globalId"]
             state.id_map[old_sa_gid] = new_sa_gid
