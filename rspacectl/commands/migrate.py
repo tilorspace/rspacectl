@@ -1831,77 +1831,35 @@ def migrate_import(
     ctx = get_context()
     inv = ctx.inv
 
-    # ---- Phase 1: Templates --------------------------------------------
-    if not skip_templates and "templates" not in state.completed_phases:
-        _import_templates(inv, templates, state, dry_run)
-        if not dry_run:
-            state.completed_phases.append("templates")
-            _save_checkpoint(checkpoint_file, state)
-    else:
-        err_console.print("\n[dim]Phase 1 (templates) — skipped.[/dim]")
+    # Each phase is (number, key, label, skip_flag, runner-callable taking no args).
+    # Wrapping each runner in a closure keeps the call-site declarative.
+    phases = [
+        (1, "templates", "templates", skip_templates,
+         lambda: _import_templates(inv, templates, state, dry_run)),
+        (2, "containers_flat", "containers flat", skip_containers,
+         lambda: _import_containers_flat(inv, containers, state, dry_run, snapshot_dir)),
+        (3, "containers_hierarchy", "container hierarchy", skip_containers,
+         lambda: _import_container_hierarchy(inv, containers, state, dry_run)),
+        (4, "samples", "samples", skip_samples,
+         lambda: _import_samples(inv, samples, state, dry_run, templates=templates)),
+        (5, "subsample_placements", "subsample placements", skip_samples,
+         lambda: _import_subsample_placements(inv, samples, state, dry_run)),
+        (6, "attachments", "attachments", skip_files,
+         lambda: _import_attachments(inv, templates, containers, samples, state, dry_run, snapshot_dir)),
+        (7, "preview_images", "preview images", skip_files,
+         lambda: _import_preview_images(inv, templates, containers, samples, state, dry_run, snapshot_dir)),
+        (8, "template_icons", "template icons", skip_files,
+         lambda: _import_template_icons(inv, templates, state, dry_run, snapshot_dir)),
+    ]
 
-    # ---- Phase 2: Containers (flat) ------------------------------------
-    if not skip_containers and "containers_flat" not in state.completed_phases:
-        _import_containers_flat(inv, containers, state, dry_run, snapshot_dir)
+    for num, key, label, skip, run in phases:
+        if skip or key in state.completed_phases:
+            err_console.print(f"\n[dim]Phase {num} ({label}) — skipped.[/dim]")
+            continue
+        run()
         if not dry_run:
-            state.completed_phases.append("containers_flat")
+            state.completed_phases.append(key)
             _save_checkpoint(checkpoint_file, state)
-    else:
-        err_console.print("\n[dim]Phase 2 (containers flat) — skipped.[/dim]")
-
-    # ---- Phase 3: Container hierarchy ----------------------------------
-    if not skip_containers and "containers_hierarchy" not in state.completed_phases:
-        _import_container_hierarchy(inv, containers, state, dry_run)
-        if not dry_run:
-            state.completed_phases.append("containers_hierarchy")
-            _save_checkpoint(checkpoint_file, state)
-    else:
-        err_console.print("\n[dim]Phase 3 (container hierarchy) — skipped.[/dim]")
-
-    # ---- Phase 4: Samples + subsamples ---------------------------------
-    if not skip_samples and "samples" not in state.completed_phases:
-        _import_samples(inv, samples, state, dry_run, templates=templates)
-        if not dry_run:
-            state.completed_phases.append("samples")
-            _save_checkpoint(checkpoint_file, state)
-    else:
-        err_console.print("\n[dim]Phase 4 (samples) — skipped.[/dim]")
-
-    # ---- Phase 5: Subsample placements ---------------------------------
-    if not skip_samples and "subsample_placements" not in state.completed_phases:
-        _import_subsample_placements(inv, samples, state, dry_run)
-        if not dry_run:
-            state.completed_phases.append("subsample_placements")
-            _save_checkpoint(checkpoint_file, state)
-    else:
-        err_console.print("\n[dim]Phase 5 (subsample placements) — skipped.[/dim]")
-
-    # ---- Phase 6: Attachments ------------------------------------------
-    if not skip_files and "attachments" not in state.completed_phases:
-        _import_attachments(inv, templates, containers, samples, state, dry_run, snapshot_dir)
-        if not dry_run:
-            state.completed_phases.append("attachments")
-            _save_checkpoint(checkpoint_file, state)
-    else:
-        err_console.print("\n[dim]Phase 6 (attachments) — skipped.[/dim]")
-
-    # ---- Phase 7: Preview images ---------------------------------------
-    if not skip_files and "preview_images" not in state.completed_phases:
-        _import_preview_images(inv, templates, containers, samples, state, dry_run, snapshot_dir)
-        if not dry_run:
-            state.completed_phases.append("preview_images")
-            _save_checkpoint(checkpoint_file, state)
-    else:
-        err_console.print("\n[dim]Phase 7 (preview images) — skipped.[/dim]")
-
-    # ---- Phase 8: Template icons ----------------------------------------
-    if not skip_files and "template_icons" not in state.completed_phases:
-        _import_template_icons(inv, templates, state, dry_run, snapshot_dir)
-        if not dry_run:
-            state.completed_phases.append("template_icons")
-            _save_checkpoint(checkpoint_file, state)
-    else:
-        err_console.print("\n[dim]Phase 8 (template icons) — skipped.[/dim]")
 
     # ---- Summary -------------------------------------------------------
     console.print("\n" + "─" * 60)
