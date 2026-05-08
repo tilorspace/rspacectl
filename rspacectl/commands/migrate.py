@@ -176,6 +176,25 @@ def _load_checkpoint(path: Path) -> _ImportState:
     return _ImportState.from_dict(json.loads(path.read_text()))
 
 
+def _record_error(state: _ImportState, message: str) -> None:
+    """Warn the user and append the message to the import state's error list."""
+    warn(message)
+    state.errors.append(message)
+
+
+# Module-level export warning collector.  Reset at the start of each export
+# so the final summary can tally any download failures.  Module-level state is
+# acceptable here because each CLI invocation runs a single command in its own
+# process; the helpers don't otherwise share state across calls.
+_export_warnings: List[str] = []
+
+
+def _export_warn(message: str) -> None:
+    """Warn the user and record the message for the export summary."""
+    warn(message)
+    _export_warnings.append(message)
+
+
 # ---------------------------------------------------------------------------
 # Pagination helper
 # ---------------------------------------------------------------------------
@@ -259,7 +278,7 @@ def _export_attachments(inv, item: Dict, item_dir: Path) -> List[Dict]:
             inv.download_attachment_by_id(att_id, str(dest))
             meta.append({"globalId": att.get("globalId"), "filename": filename, "local": local_name})
         except Exception as exc:
-            warn(f"Could not download attachment {att.get('globalId')} for {item.get('globalId')}: {exc}")
+            _export_warn(f"Could not download attachment {att.get('globalId')} for {item.get('globalId')}: {exc}")
     return meta
 
 
@@ -285,7 +304,7 @@ def _export_attachment_extra_fields(inv, item: Dict, item_dir: Path) -> List[Dic
             att_id = content
             att_gid = f"IF{content}"
         else:
-            warn(
+            _export_warn(
                 f"extraField {field_name!r} on {item.get('globalId')}: "
                 f"unrecognised attachment content {content!r} — skipped."
             )
@@ -297,7 +316,7 @@ def _export_attachment_extra_fields(inv, item: Dict, item_dir: Path) -> List[Dic
             inv.download_attachment_by_id(att_id, str(dest))
             meta.append({"field_name": field_name, "globalId": att_gid, "local": local_name})
         except Exception as exc:
-            warn(
+            _export_warn(
                 f"Could not download extraField attachment {att_gid} "
                 f"({field_name!r}) for {item.get('globalId')}: {exc}"
             )
@@ -345,7 +364,7 @@ def _export_preview_image(inv, item: Dict, images_dir: Path) -> Optional[str]:
                 fh.write(chunk)
         return local_name
     except Exception as exc:
-        warn(f"Could not download preview image for {gid}: {exc}")
+        _export_warn(f"Could not download preview image for {gid}: {exc}")
         return None
 
 
@@ -363,7 +382,7 @@ def _export_template_icon(inv, tmpl: Dict, icons_dir: Path) -> Optional[str]:
         inv.get_sample_template_icon(tmpl_id, icon_id, str(dest))
         return local_name
     except Exception as exc:
-        warn(f"Could not download icon for template {gid}: {exc}")
+        _export_warn(f"Could not download icon for template {gid}: {exc}")
         return None
 
 
@@ -389,11 +408,11 @@ def _export_image_container(inv, container: Dict, ic_dir: Path) -> Dict:
                 inv.download_link_to_file(href, str(dest))
                 result["background_local"] = local_name
             except Exception as exc:
-                warn(f"Could not download background image for IMAGE container {gid}: {exc}")
+                _export_warn(f"Could not download background image for IMAGE container {gid}: {exc}")
             break
 
     if "background_local" not in result:
-        warn(
+        _export_warn(
             f"IMAGE container {gid} ({container.get('name')!r}): "
             "no background image link found in API response — background will not be migrated."
         )
@@ -1202,8 +1221,7 @@ def _restore_subsample(inv, old_ss: Dict, new_ss_id: int, state: _ImportState) -
             params=patch,
         )
     except Exception as exc:
-        warn(f"Could not update subsample {new_ss_id}: {exc}")
-        state.errors.append(f"Subsample {new_ss_id} update: {exc}")
+        _record_error(state, f"Subsample {new_ss_id} update: {exc}")
 
 
 def _import_subsample_placements(
@@ -1474,11 +1492,6 @@ def _import_template_icons(
             _record_error(state, f"Template icon for {old_gid}: {exc}")
 
 
-def _record_error(state: _ImportState, message: str) -> None:
-    warn(message)
-    state.errors.append(message)
-
-
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -1537,6 +1550,9 @@ def migrate_export(
 
     snapshot_dir = _snapshot_dir(output)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fresh slate for export-side warnings, so the final summary tally is accurate.
+    _export_warnings.clear()
 
     ctx = get_context()
     inv = ctx.inv
@@ -1692,6 +1708,12 @@ def migrate_export(
             console.print("  " + "  ".join(parts))
         else:
             console.print("  [dim]No files exported.[/dim]")
+
+    if _export_warnings:
+        console.print(
+            f"  [yellow]Warnings: {len(_export_warnings)}[/yellow] "
+            "(see messages above)"
+        )
 
 
 @app.command("import")
