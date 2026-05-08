@@ -59,6 +59,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import typer
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rspace_client.inv.inv import Pagination
 
 from ..context import get_context
@@ -210,6 +217,23 @@ def _export_warn(message: str) -> None:
     """Warn the user and record the message for the export summary."""
     warn(message)
     _export_warnings.append(message)
+
+
+def _progress() -> Progress:
+    """Build a Progress instance configured for this command's use.
+
+    Renders to stderr (so progress doesn't pollute piped stdout) with a
+    description, bar, item count, and elapsed time.  Use as a context manager
+    around a phase's work loop.
+    """
+    return Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=err_console,
+        transient=False,  # leave the final bar visible after completion
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -732,75 +756,85 @@ def _export_files(
 
     err_console.print("\n[bold]Exporting files…[/bold]")
 
-    # --- Templates: attachments + preview image + icon ---
-    for tmpl in templates:
-        gid = tmpl.get("globalId", "")
-        mig = tmpl.setdefault("_migration", {})
+    # Total = templates + containers + samples + every subsample.  Used to
+    # drive the progress bar so users see how far through file downloads we are.
+    n_subsamples = sum(len(s.get("subSamples", [])) for s in samples)
+    total_items = len(templates) + len(containers) + len(samples) + n_subsamples
 
-        att_meta = _export_attachments(inv, tmpl, att_dir / gid)
-        ef_meta = _export_attachment_extra_fields(inv, tmpl, att_dir / gid)
-        if att_meta or ef_meta:
-            mig["attachments"] = att_meta
-            mig["attachment_extra_fields"] = ef_meta
+    with _progress() as prog:
+        task = prog.add_task("[cyan]Downloading files", total=total_items)
 
-        preview_local = _export_preview_image(inv, tmpl, img_dir)
-        if preview_local:
-            mig["preview_local"] = preview_local
+        # --- Templates: attachments + preview image + icon ---
+        for tmpl in templates:
+            gid = tmpl.get("globalId", "")
+            mig = tmpl.setdefault("_migration", {})
 
-        icon_local = _export_template_icon(inv, tmpl, ico_dir)
-        if icon_local:
-            mig["icon_local"] = icon_local
-
-    # --- Containers: attachments + preview image + IMAGE background ---
-    for c in containers:
-        gid = c.get("globalId", "")
-        mig = c.setdefault("_migration", {})
-
-        att_meta = _export_attachments(inv, c, att_dir / gid)
-        ef_meta = _export_attachment_extra_fields(inv, c, att_dir / gid)
-        if att_meta or ef_meta:
-            mig["attachments"] = att_meta
-            mig["attachment_extra_fields"] = ef_meta
-
-        preview_local = _export_preview_image(inv, c, img_dir)
-        if preview_local:
-            mig["preview_local"] = preview_local
-
-        if c.get("cType") == "IMAGE":
-            ic_meta = _export_image_container(inv, c, ic_dir)
-            if ic_meta:
-                mig["image_container"] = ic_meta
-
-    # --- Samples + subsamples: attachments + preview image ---
-    for sample in samples:
-        sa_gid = sample.get("globalId", "")
-        mig = sample.setdefault("_migration", {})
-
-        att_meta = _export_attachments(inv, sample, att_dir / sa_gid)
-        ef_meta = _export_attachment_extra_fields(inv, sample, att_dir / sa_gid)
-        if att_meta or ef_meta:
-            mig["attachments"] = att_meta
-            mig["attachment_extra_fields"] = ef_meta
-
-        preview_local = _export_preview_image(inv, sample, img_dir)
-        if preview_local:
-            mig["preview_local"] = preview_local
-
-        for ss in sample.get("subSamples", []):
-            ss_gid = ss.get("globalId", "")
-            ss_mig = ss.setdefault("_migration", {})
-
-            att_meta = _export_attachments(inv, ss, att_dir / ss_gid)
-            ef_meta = _export_attachment_extra_fields(inv, ss, att_dir / ss_gid)
+            att_meta = _export_attachments(inv, tmpl, att_dir / gid)
+            ef_meta = _export_attachment_extra_fields(inv, tmpl, att_dir / gid)
             if att_meta or ef_meta:
-                ss_mig["attachments"] = att_meta
-                ss_mig["attachment_extra_fields"] = ef_meta
+                mig["attachments"] = att_meta
+                mig["attachment_extra_fields"] = ef_meta
 
-            preview_local = _export_preview_image(inv, ss, img_dir)
+            preview_local = _export_preview_image(inv, tmpl, img_dir)
             if preview_local:
-                ss_mig["preview_local"] = preview_local
+                mig["preview_local"] = preview_local
 
-    err_console.print("  File export complete.")
+            icon_local = _export_template_icon(inv, tmpl, ico_dir)
+            if icon_local:
+                mig["icon_local"] = icon_local
+            prog.advance(task)
+
+        # --- Containers: attachments + preview image + IMAGE background ---
+        for c in containers:
+            gid = c.get("globalId", "")
+            mig = c.setdefault("_migration", {})
+
+            att_meta = _export_attachments(inv, c, att_dir / gid)
+            ef_meta = _export_attachment_extra_fields(inv, c, att_dir / gid)
+            if att_meta or ef_meta:
+                mig["attachments"] = att_meta
+                mig["attachment_extra_fields"] = ef_meta
+
+            preview_local = _export_preview_image(inv, c, img_dir)
+            if preview_local:
+                mig["preview_local"] = preview_local
+
+            if c.get("cType") == "IMAGE":
+                ic_meta = _export_image_container(inv, c, ic_dir)
+                if ic_meta:
+                    mig["image_container"] = ic_meta
+            prog.advance(task)
+
+        # --- Samples + subsamples: attachments + preview image ---
+        for sample in samples:
+            sa_gid = sample.get("globalId", "")
+            mig = sample.setdefault("_migration", {})
+
+            att_meta = _export_attachments(inv, sample, att_dir / sa_gid)
+            ef_meta = _export_attachment_extra_fields(inv, sample, att_dir / sa_gid)
+            if att_meta or ef_meta:
+                mig["attachments"] = att_meta
+                mig["attachment_extra_fields"] = ef_meta
+
+            preview_local = _export_preview_image(inv, sample, img_dir)
+            if preview_local:
+                mig["preview_local"] = preview_local
+            prog.advance(task)
+
+            for ss in sample.get("subSamples", []):
+                ss_gid = ss.get("globalId", "")
+                ss_mig = ss.setdefault("_migration", {})
+
+                att_meta = _export_attachments(inv, ss, att_dir / ss_gid)
+                ef_meta = _export_attachment_extra_fields(inv, ss, att_dir / ss_gid)
+                if att_meta or ef_meta:
+                    ss_mig["attachments"] = att_meta
+                    ss_mig["attachment_extra_fields"] = ef_meta
+
+                preview_local = _export_preview_image(inv, ss, img_dir)
+                if preview_local:
+                    ss_mig["preview_local"] = preview_local
+                prog.advance(task)
 
 
 # ---------------------------------------------------------------------------
@@ -1370,37 +1404,41 @@ def _import_attachments(
 
     err_console.print(f"\n[bold]Phase 6[/bold] — restoring {total} attachment(s)…")
 
-    for old_gid, item in all_items:
-        mig = item.get("_migration") or {}
-        att_list = mig.get("attachments") or []
-        if not att_list:
-            continue
+    with _progress() as prog:
+        task = prog.add_task("[cyan]Uploading attachments", total=total)
 
-        new_gid = _resolve_new_gid(old_gid, state, "Attachments")
-        if not new_gid:
-            continue
+        for old_gid, item in all_items:
+            mig = item.get("_migration") or {}
+            att_list = mig.get("attachments") or []
+            if not att_list:
+                continue
 
-        item_att_dir = att_dir / old_gid
-        for att in att_list:
-            local_name = att.get("local")
-            filename = att.get("filename", local_name)
-            src = item_att_dir / local_name if local_name else None
-            if not src or not src.exists():
-                warn(f"Attachment file missing: {src} — skipped")
+            new_gid = _resolve_new_gid(old_gid, state, "Attachments")
+            if not new_gid:
+                prog.advance(task, len(att_list))
                 continue
-            if dry_run:
-                console.print(
-                    f"  [dim]DRY RUN[/dim]  would upload {filename!r} → [cyan]{new_gid}[/cyan]"
-                )
-                continue
-            try:
-                with open(src, "rb") as fh:
-                    inv.upload_attachment(new_gid, fh)
-                console.print(
-                    f"  [green]✓[/green]  {filename!r} → [cyan]{new_gid}[/cyan]"
-                )
-            except Exception as exc:
-                _record_error(state, f"Attachment {filename!r} for {old_gid}: {exc}")
+
+            item_att_dir = att_dir / old_gid
+            for att in att_list:
+                local_name = att.get("local")
+                filename = att.get("filename", local_name)
+                src = item_att_dir / local_name if local_name else None
+                if not src or not src.exists():
+                    warn(f"Attachment file missing: {src} — skipped")
+                    prog.advance(task)
+                    continue
+                if dry_run:
+                    prog.console.print(
+                        f"  [dim]DRY RUN[/dim]  would upload {filename!r} → [cyan]{new_gid}[/cyan]"
+                    )
+                    prog.advance(task)
+                    continue
+                try:
+                    with open(src, "rb") as fh:
+                        inv.upload_attachment(new_gid, fh)
+                except Exception as exc:
+                    _record_error(state, f"Attachment {filename!r} for {old_gid}: {exc}")
+                prog.advance(task)
 
 
 def _import_preview_images(
@@ -1429,33 +1467,39 @@ def _import_preview_images(
 
     err_console.print(f"\n[bold]Phase 7[/bold] — restoring {total} preview image(s)…")
 
-    for old_gid, item in all_items:
-        mig = item.get("_migration") or {}
-        preview_local = mig.get("preview_local")
-        if not preview_local:
-            continue
+    with _progress() as prog:
+        task = prog.add_task("[cyan]Uploading preview images", total=total)
 
-        new_gid = _resolve_new_gid(old_gid, state, "Preview image")
-        if not new_gid:
-            continue
+        for old_gid, item in all_items:
+            mig = item.get("_migration") or {}
+            preview_local = mig.get("preview_local")
+            if not preview_local:
+                continue
 
-        src = img_dir / preview_local
-        if not src.exists():
-            warn(f"Preview image file missing: {src} — skipped")
-            continue
+            new_gid = _resolve_new_gid(old_gid, state, "Preview image")
+            if not new_gid:
+                prog.advance(task)
+                continue
 
-        if dry_run:
-            console.print(
-                f"  [dim]DRY RUN[/dim]  would set image for [cyan]{new_gid}[/cyan]"
-            )
-            continue
+            src = img_dir / preview_local
+            if not src.exists():
+                warn(f"Preview image file missing: {src} — skipped")
+                prog.advance(task)
+                continue
 
-        try:
-            with open(src, "rb") as fh:
-                inv.set_image(new_gid, fh)
-            console.print(f"  [green]✓[/green]  [cyan]{old_gid}[/cyan] → [cyan]{new_gid}[/cyan]  (preview image)")
-        except Exception as exc:
-            _record_error(state, f"Preview image for {old_gid}: {exc}")
+            if dry_run:
+                prog.console.print(
+                    f"  [dim]DRY RUN[/dim]  would set image for [cyan]{new_gid}[/cyan]"
+                )
+                prog.advance(task)
+                continue
+
+            try:
+                with open(src, "rb") as fh:
+                    inv.set_image(new_gid, fh)
+            except Exception as exc:
+                _record_error(state, f"Preview image for {old_gid}: {exc}")
+            prog.advance(task)
 
 
 def _import_template_icons(
