@@ -477,6 +477,3 @@ poetry run black rspacectl tests
 poetry run ruff check rspacectl tests
 ```
 
-## License
-
-Apache 2.0 — see [LICENSE](LICENSE).
