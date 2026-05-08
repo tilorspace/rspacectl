@@ -138,10 +138,16 @@ def _import_containers_flat(
                     from rspace_client.inv.inv import ImageContainerPost
                     locations = ic_meta.get("locations") or []
                     location_tuples = [(loc["coordX"], loc["coordY"]) for loc in locations]
+                    # Create the container without markers — the SDK's
+                    # ImageContainerPost emits them as plain {coordX, coordY}
+                    # entries, but the API requires {newLocationRequest: True,
+                    # coordX, coordY} (the form add_locations_to_image_container
+                    # uses on PUT).  The markers are silently dropped on POST.
+                    # Workaround: create empty, then add markers separately.
                     post = ImageContainerPost(
                         name=c["name"],
                         image_file=str(bg_path),
-                        locations=location_tuples,
+                        locations=[],
                         tags=tags,
                         description=desc,
                         extra_fields=extra_fields,
@@ -149,6 +155,10 @@ def _import_containers_flat(
                         can_store_samples=can_samples,
                     )
                     new_c = inv.create_image_container(post)
+                    if location_tuples:
+                        new_c = inv.add_locations_to_image_container(
+                            new_c, *location_tuples
+                        )
                 else:
                     warn(
                         f"Container {old_gid} ({c['name']!r}) is an IMAGE container but "
@@ -547,7 +557,9 @@ def _image_marker_lookup(
     (this is the primary lookup path).  The coord map is a fallback for
     legacy snapshots that don't carry ``marker_index``.
     """
-    new_c = inv.get_container_by_id(parse_id(new_c_gid))
+    # include_content=True so the API definitely returns the locations array
+    # (the un-extended response sometimes omits it on demos).
+    new_c = inv.get_container_by_id(parse_id(new_c_gid), include_content=True)
     ordered: List[int] = []
     by_coords: Dict[Tuple[int, int], int] = {}
     for loc in new_c.get("locations") or []:
