@@ -478,6 +478,92 @@ class TestImportContainerHierarchy:
         mock_inv.add_items_to_list_container.assert_not_called()
 
 
+class TestEnrichImageMarkerIndices:
+    def test_annotates_subsample_with_marker_index(self):
+        containers = [
+            {
+                "globalId": "IC10",
+                "cType": "IMAGE",
+                "locations": [
+                    {"id": 1, "coordX": 50, "coordY": 75},
+                    {"id": 2, "coordX": 100, "coordY": 200},
+                    {"id": 3, "coordX": 300, "coordY": 400},
+                ],
+            }
+        ]
+        samples = [
+            {
+                "_migration": {
+                    "subsample_locations": [
+                        {
+                            "subsample_global_id": "SS1",
+                            "container_global_id": "IC10",
+                            "parent_ctype": "IMAGE",
+                            "grid_col": 100,
+                            "grid_row": 200,
+                        }
+                    ]
+                }
+            }
+        ]
+        migrate._enrich_image_marker_indices(containers, samples)
+        loc = samples[0]["_migration"]["subsample_locations"][0]
+        assert loc["marker_index"] == 1  # second marker
+
+    def test_marker_index_none_when_no_match(self):
+        containers = [
+            {
+                "globalId": "IC10",
+                "cType": "IMAGE",
+                "locations": [{"id": 1, "coordX": 50, "coordY": 75}],
+            }
+        ]
+        samples = [
+            {
+                "_migration": {
+                    "subsample_locations": [
+                        {
+                            "subsample_global_id": "SS1",
+                            "container_global_id": "IC10",
+                            "parent_ctype": "IMAGE",
+                            "grid_col": 999,
+                            "grid_row": 999,
+                        }
+                    ]
+                }
+            }
+        ]
+        migrate._enrich_image_marker_indices(containers, samples)
+        assert samples[0]["_migration"]["subsample_locations"][0]["marker_index"] is None
+
+    def test_skips_non_image_parents(self):
+        containers = [
+            {
+                "globalId": "IC10",
+                "cType": "GRID",
+                "locations": [{"id": 1, "coordX": 0, "coordY": 0}],
+            }
+        ]
+        samples = [
+            {
+                "_migration": {
+                    "subsample_locations": [
+                        {
+                            "subsample_global_id": "SS1",
+                            "container_global_id": "IC10",
+                            "parent_ctype": "GRID",
+                            "grid_col": 0,
+                            "grid_row": 0,
+                        }
+                    ]
+                }
+            }
+        ]
+        migrate._enrich_image_marker_indices(containers, samples)
+        # GRID placements get no marker_index annotation
+        assert "marker_index" not in samples[0]["_migration"]["subsample_locations"][0]
+
+
 class TestImportSubsamplePlacements:
     def test_skips_workbench_parents(self, mock_inv, empty_state):
         samples = [
@@ -497,9 +583,48 @@ class TestImportSubsamplePlacements:
         # Workbench skips don't go into errors (they're summarised as a warning)
         assert empty_state.errors == []
 
-    def test_image_parent_uses_marker_lookup(self, mock_inv, empty_state):
-        """IMAGE-container subsamples must resolve to the new container's
-        marker location id (looked up by source coords), not coordinates."""
+    def test_image_parent_uses_marker_index(self, mock_inv, empty_state):
+        """IMAGE-container subsamples should resolve via marker_index, which
+        is robust to coord transformations the API may apply on container
+        recreation (snapping, rescaling, rounding)."""
+        samples = [
+            {
+                "_migration": {
+                    "subsample_locations": [
+                        {
+                            "subsample_global_id": "SS1",
+                            "container_global_id": "IC100",
+                            "parent_ctype": "IMAGE",
+                            # Source coords (irrelevant if marker_index resolves)
+                            "grid_col": 604,
+                            "grid_row": 249,
+                            "marker_index": 1,  # second marker
+                        }
+                    ]
+                }
+            }
+        ]
+        empty_state.id_map["SS1"] = "SS500"
+        empty_state.id_map["IC100"] = "IC900"
+        # New container has markers at DIFFERENT coords (API rescaled them),
+        # but in the same order — so index-based lookup still works.
+        mock_inv.get_container_by_id.return_value = {
+            "locations": [
+                {"id": 9001, "coordX": 1, "coordY": 1},
+                {"id": 9002, "coordX": 2, "coordY": 2},  # ← marker_index=1
+                {"id": 9003, "coordX": 3, "coordY": 3},
+            ],
+        }
+
+        migrate._import_subsample_placements(mock_inv, samples, empty_state, dry_run=False)
+
+        mock_inv.add_items_to_image_container.assert_called_once()
+        kwargs = mock_inv.add_items_to_image_container.call_args.kwargs
+        assert kwargs["location_ids"] == [9002]
+        assert empty_state.errors == []
+
+    def test_image_parent_falls_back_to_coords_when_no_index(self, mock_inv, empty_state):
+        """Legacy snapshots without marker_index fall back to coord lookup."""
         samples = [
             {
                 "_migration": {
@@ -510,16 +635,15 @@ class TestImportSubsamplePlacements:
                             "parent_ctype": "IMAGE",
                             "grid_col": 50,
                             "grid_row": 75,
+                            # no marker_index
                         }
                     ]
                 }
             }
         ]
-        # Map the old ids to new ones, and have the new container expose markers.
         empty_state.id_map["SS1"] = "SS500"
         empty_state.id_map["IC100"] = "IC900"
         mock_inv.get_container_by_id.return_value = {
-            "globalId": "IC900",
             "locations": [
                 {"id": 9001, "coordX": 50, "coordY": 75},
                 {"id": 9002, "coordX": 100, "coordY": 200},
@@ -527,16 +651,11 @@ class TestImportSubsamplePlacements:
         }
 
         migrate._import_subsample_placements(mock_inv, samples, empty_state, dry_run=False)
-
-        mock_inv.add_items_to_image_container.assert_called_once()
         kwargs = mock_inv.add_items_to_image_container.call_args.kwargs
-        assert kwargs["items_to_move"] == ["SS500"]
-        assert kwargs["location_ids"] == [9001]  # the marker at (50, 75)
-        mock_inv.add_items_to_list_container.assert_not_called()
+        assert kwargs["location_ids"] == [9001]
 
-    def test_image_parent_no_matching_marker(self, mock_inv, empty_state):
-        """If the source coords don't match a marker on the new container,
-        record an error and don't place."""
+    def test_image_parent_unresolvable_marker(self, mock_inv, empty_state):
+        """If neither index nor coords match anything, record an error."""
         samples = [
             {
                 "_migration": {
@@ -547,6 +666,7 @@ class TestImportSubsamplePlacements:
                             "parent_ctype": "IMAGE",
                             "grid_col": 999,
                             "grid_row": 999,
+                            "marker_index": 99,  # out of range
                         }
                     ]
                 }
@@ -561,7 +681,7 @@ class TestImportSubsamplePlacements:
         migrate._import_subsample_placements(mock_inv, samples, empty_state, dry_run=False)
 
         mock_inv.add_items_to_image_container.assert_not_called()
-        assert any("no marker" in e for e in empty_state.errors)
+        assert any("could not resolve marker" in e for e in empty_state.errors)
 
 
 # ---------------------------------------------------------------------------

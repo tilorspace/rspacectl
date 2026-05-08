@@ -96,6 +96,7 @@ from ._common import (  # noqa: F401
 )
 from ._export import (  # noqa: F401
     _collect_subsample_locations,
+    _enrich_image_marker_indices,
     _export_attachment_extra_fields,
     _export_attachments,
     _export_containers,

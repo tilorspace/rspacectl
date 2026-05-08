@@ -499,6 +499,45 @@ def _export_samples(
 # ---------------------------------------------------------------------------
 
 
+def _enrich_image_marker_indices(
+    containers: List[Dict], samples: List[Dict]
+) -> None:
+    """Annotate IMAGE-parent subsample placements with marker_index.
+
+    The RSpace API may transform marker coords on container recreation
+    (snapping, rescaling, rounding), so coord-based marker lookup on import
+    is unreliable.  The order of markers, however, is preserved.  Recording
+    each subsample's marker INDEX in its source container's ``locations``
+    array gives the importer a robust way to find the right marker on the
+    recreated container — just index into ``new_container.locations``.
+
+    Mutates ``samples[*]._migration.subsample_locations[*]`` in-place,
+    adding a ``marker_index`` field where applicable.  Subsamples whose
+    coords don't match any source marker get ``marker_index=None``; the
+    importer will fall back to coord lookup for those.
+    """
+    container_markers: Dict[str, List[Tuple[Any, Any]]] = {}
+    for c in containers:
+        if c.get("cType") == "IMAGE":
+            container_markers[c["globalId"]] = [
+                (loc.get("coordX"), loc.get("coordY"))
+                for loc in c.get("locations") or []
+            ]
+
+    for sample in samples:
+        for loc in (sample.get("_migration") or {}).get("subsample_locations", []) or []:
+            if loc.get("parent_ctype") != "IMAGE":
+                continue
+            markers = container_markers.get(loc.get("container_global_id"))
+            if not markers:
+                continue
+            target = (loc.get("grid_col"), loc.get("grid_row"))
+            try:
+                loc["marker_index"] = markers.index(target)
+            except ValueError:
+                loc["marker_index"] = None
+
+
 def _export_files(
     inv,
     templates: List[Dict],
@@ -776,6 +815,12 @@ def migrate_export(
             err_console.print(f"[red]Export failed (samples): {exc}[/red]")
             raise typer.Exit(1)
         console.print(f"  Collected [green]{len(blob['samples'])}[/green] sample(s).")
+
+    # ---- Cross-reference IMAGE marker indices ----------------------------
+    # Must run after both containers and samples are exported, since it
+    # joins subsample placements against the source IMAGE containers' marker
+    # arrays.  Robust to any coord transformation the API applies on import.
+    _enrich_image_marker_indices(blob["containers"], blob["samples"])
 
     # ---- Files (attachments, images, icons) ------------------------------
     if not no_files:

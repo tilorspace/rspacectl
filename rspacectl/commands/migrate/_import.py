@@ -536,22 +536,30 @@ def _restore_subsample(inv, old_ss: Dict, new_ss_id: int, state: _ImportState) -
 # ---------------------------------------------------------------------------
 
 
-def _image_marker_lookup(inv, new_c_gid: str) -> Dict[Tuple[int, int], int]:
-    """Return a ``{(coordX, coordY): location.id}`` map for an IMAGE container.
+def _image_marker_lookup(
+    inv, new_c_gid: str
+) -> Tuple[List[int], Dict[Tuple[int, int], int]]:
+    """Return ``(ordered_marker_ids, coord_to_id_map)`` for an IMAGE container.
 
-    IMAGE-container marker locations get fresh IDs on import, but the marker
-    coordinates are preserved (we passed them at creation time).  This lookup
-    lets us resolve an old marker by coords to its new location id.
+    Used by Phase 5 to resolve the right marker on the recreated container.
+    The order of markers is preserved across container recreation, so
+    ``ordered_marker_ids[i]`` is the new ID for the source's i-th marker
+    (this is the primary lookup path).  The coord map is a fallback for
+    legacy snapshots that don't carry ``marker_index``.
     """
     new_c = inv.get_container_by_id(parse_id(new_c_gid))
-    out: Dict[Tuple[int, int], int] = {}
+    ordered: List[int] = []
+    by_coords: Dict[Tuple[int, int], int] = {}
     for loc in new_c.get("locations") or []:
+        loc_id = loc.get("id")
+        if loc_id is None:
+            continue
+        ordered.append(loc_id)
         x = loc.get("coordX")
         y = loc.get("coordY")
-        loc_id = loc.get("id")
-        if x is not None and y is not None and loc_id is not None:
-            out[(x, y)] = loc_id
-    return out
+        if x is not None and y is not None:
+            by_coords[(x, y)] = loc_id
+    return ordered, by_coords
 
 
 def _import_subsample_placements(
@@ -585,7 +593,8 @@ def _import_subsample_placements(
 
     workbench_skipped: List[str] = []
     # Lazy cache of new IMAGE container coord→loc_id maps, keyed by new globalId.
-    image_lookups: Dict[str, Dict[Tuple[int, int], int]] = {}
+    # Cache of (ordered_marker_ids, coord_to_id_map) per new IMAGE container.
+    image_lookups: Dict[str, Tuple[List[int], Dict[Tuple[int, int], int]]] = {}
 
     for loc in placements:
         old_ss_gid = loc["subsample_global_id"]
@@ -624,21 +633,25 @@ def _import_subsample_placements(
             col = loc.get("grid_col")
 
             if parent_ctype == "IMAGE":
-                if col is None or row is None:
-                    _record_error(
-                        state,
-                        f"Subsample placement {old_ss_gid} → {old_c_gid}: "
-                        "IMAGE parent but no coords recorded — skipped",
-                    )
-                    continue
                 if new_c_gid not in image_lookups:
                     image_lookups[new_c_gid] = _image_marker_lookup(inv, new_c_gid)
-                new_loc_id = image_lookups[new_c_gid].get((col, row))
+                ordered, by_coords = image_lookups[new_c_gid]
+
+                # Prefer marker_index (robust to API coord transformations).
+                # Fall back to coord lookup for legacy snapshots without it.
+                marker_index = loc.get("marker_index")
+                new_loc_id: Optional[int] = None
+                if isinstance(marker_index, int) and 0 <= marker_index < len(ordered):
+                    new_loc_id = ordered[marker_index]
+                elif col is not None and row is not None:
+                    new_loc_id = by_coords.get((col, row))
+
                 if new_loc_id is None:
                     _record_error(
                         state,
                         f"Subsample placement {old_ss_gid} → {old_c_gid}: "
-                        f"no marker at coords ({col},{row}) in new IMAGE container — skipped",
+                        f"could not resolve marker on new IMAGE container "
+                        f"(marker_index={marker_index}, coords=({col},{row})) — skipped",
                     )
                     continue
                 inv.add_items_to_image_container(
