@@ -394,13 +394,17 @@ def _export_containers(
 
 
 def _collect_subsample_locations(sample: Dict) -> List[Dict]:
-    """Extract where each subsample sits (container + optional grid position).
+    """Extract where each subsample sits (container + position metadata).
 
-    The RSpace API returns the grid position in the subsample's own
+    The RSpace API returns the position in the subsample's own
     ``parentLocation`` field (``{"coordX": col, "coordY": row}``), not inside
-    the ``parentContainers`` entry.  We record ``grid_col`` / ``grid_row`` only
-    when the immediate parent is a GRID container — for LIST parents the coords
-    are sequential slot IDs that carry no meaningful position.
+    the ``parentContainers`` entry.  We record coords only for GRID and IMAGE
+    parents — for LIST parents the coords are sequential slot IDs that carry
+    no meaningful position.
+
+    Also records the parent ``cType`` so the importer can pick the correct
+    SDK call (``add_items_to_grid_container`` vs ``add_items_to_image_container``
+    vs ``add_items_to_list_container``).
     """
     locations = []
     for ss in sample.get("subSamples", []):
@@ -408,14 +412,18 @@ def _collect_subsample_locations(sample: Dict) -> List[Dict]:
         if not parents:
             continue
         parent = parents[0]  # a subsample lives in exactly one container at a time
-        is_grid = parent.get("cType") == "GRID"
+        ctype = parent.get("cType")
         parent_loc = ss.get("parentLocation") or {}
+        # Coords are meaningful for GRID and IMAGE; they pin to a grid cell or
+        # to a marker location respectively.  For LIST they're slot IDs.
+        record_coords = ctype in ("GRID", "IMAGE")
         locations.append(
             {
                 "subsample_global_id": ss["globalId"],
                 "container_global_id": parent.get("globalId"),
-                "grid_col": parent_loc.get("coordX") if is_grid else None,
-                "grid_row": parent_loc.get("coordY") if is_grid else None,
+                "parent_ctype": ctype,
+                "grid_col": parent_loc.get("coordX") if record_coords else None,
+                "grid_row": parent_loc.get("coordY") if record_coords else None,
             }
         )
     return locations

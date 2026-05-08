@@ -113,6 +113,7 @@ from ._import import (  # noqa: F401
     _creation_fields_from_state,
     _derive_total_quantity,
     _field_updates_by_name,
+    _image_marker_lookup,
     _import_attachments,
     _import_container_hierarchy,
     _import_containers_flat,

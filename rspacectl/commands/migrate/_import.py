@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import typer
 
@@ -536,10 +536,39 @@ def _restore_subsample(inv, old_ss: Dict, new_ss_id: int, state: _ImportState) -
 # ---------------------------------------------------------------------------
 
 
+def _image_marker_lookup(inv, new_c_gid: str) -> Dict[Tuple[int, int], int]:
+    """Return a ``{(coordX, coordY): location.id}`` map for an IMAGE container.
+
+    IMAGE-container marker locations get fresh IDs on import, but the marker
+    coordinates are preserved (we passed them at creation time).  This lookup
+    lets us resolve an old marker by coords to its new location id.
+    """
+    new_c = inv.get_container_by_id(parse_id(new_c_gid))
+    out: Dict[Tuple[int, int], int] = {}
+    for loc in new_c.get("locations") or []:
+        x = loc.get("coordX")
+        y = loc.get("coordY")
+        loc_id = loc.get("id")
+        if x is not None and y is not None and loc_id is not None:
+            out[(x, y)] = loc_id
+    return out
+
+
 def _import_subsample_placements(
     inv, samples: List[Dict], state: _ImportState, dry_run: bool
 ) -> None:
-    """Phase 5 — move subsamples into their recorded containers."""
+    """Phase 5 — move subsamples into their recorded containers.
+
+    Branches on the source parent's cType to use the correct SDK call:
+    - GRID  → add_items_to_grid_container (with row/col coords)
+    - IMAGE → add_items_to_image_container (with marker location id, looked
+              up from the new container by source coords)
+    - LIST or unknown → add_items_to_list_container
+
+    Old snapshots without ``parent_ctype`` fall back to the GRID/LIST split
+    based on whether coords are present (legacy behaviour; IMAGE subsamples
+    in those snapshots will land on the workbench, as they did before).
+    """
     placements = [
         loc
         for sample in samples
@@ -555,10 +584,13 @@ def _import_subsample_placements(
     )
 
     workbench_skipped: List[str] = []
+    # Lazy cache of new IMAGE container coord→loc_id maps, keyed by new globalId.
+    image_lookups: Dict[str, Dict[Tuple[int, int], int]] = {}
 
     for loc in placements:
         old_ss_gid = loc["subsample_global_id"]
         old_c_gid = loc["container_global_id"]
+        parent_ctype = loc.get("parent_ctype")  # may be missing on legacy snapshots
 
         # Workbench containers (BE-prefix) are per-user and can't be migrated —
         # collect them for a single summary warning rather than per-item errors.
@@ -591,7 +623,30 @@ def _import_subsample_placements(
             row = loc.get("grid_row")
             col = loc.get("grid_col")
 
-            if row is not None and col is not None:
+            if parent_ctype == "IMAGE":
+                if col is None or row is None:
+                    _record_error(
+                        state,
+                        f"Subsample placement {old_ss_gid} → {old_c_gid}: "
+                        "IMAGE parent but no coords recorded — skipped",
+                    )
+                    continue
+                if new_c_gid not in image_lookups:
+                    image_lookups[new_c_gid] = _image_marker_lookup(inv, new_c_gid)
+                new_loc_id = image_lookups[new_c_gid].get((col, row))
+                if new_loc_id is None:
+                    _record_error(
+                        state,
+                        f"Subsample placement {old_ss_gid} → {old_c_gid}: "
+                        f"no marker at coords ({col},{row}) in new IMAGE container — skipped",
+                    )
+                    continue
+                inv.add_items_to_image_container(
+                    target_container_id=new_c_id,
+                    items_to_move=[new_ss_gid],
+                    location_ids=[new_loc_id],
+                )
+            elif parent_ctype == "GRID" or (col is not None and row is not None):
                 from rspace_client.inv.inv import ByLocation, GridLocation
 
                 # ByLocation(locations, *items_to_move) — locations list is first arg

@@ -293,10 +293,27 @@ class TestCollectSubsampleLocations:
             {
                 "subsample_global_id": "SS1",
                 "container_global_id": "IC10",
+                "parent_ctype": "GRID",
                 "grid_col": 2,
                 "grid_row": 3,
             }
         ]
+
+    def test_image_parent_records_coords(self):
+        # IMAGE parents need coords too — they pin to a marker location.
+        sample = {
+            "subSamples": [
+                {
+                    "globalId": "SS1",
+                    "parentContainers": [{"globalId": "IC10", "cType": "IMAGE"}],
+                    "parentLocation": {"coordX": 50, "coordY": 75},
+                }
+            ]
+        }
+        out = _collect_subsample_locations(sample)
+        assert out[0]["parent_ctype"] == "IMAGE"
+        assert out[0]["grid_col"] == 50
+        assert out[0]["grid_row"] == 75
 
     def test_list_parent_strips_coords(self):
         sample = {
@@ -310,6 +327,7 @@ class TestCollectSubsampleLocations:
         }
         out = _collect_subsample_locations(sample)
         # LIST coords are slot IDs, not meaningful — stripped.
+        assert out[0]["parent_ctype"] == "LIST"
         assert out[0]["grid_col"] is None
         assert out[0]["grid_row"] is None
 
@@ -478,6 +496,72 @@ class TestImportSubsamplePlacements:
         mock_inv.add_items_to_list_container.assert_not_called()
         # Workbench skips don't go into errors (they're summarised as a warning)
         assert empty_state.errors == []
+
+    def test_image_parent_uses_marker_lookup(self, mock_inv, empty_state):
+        """IMAGE-container subsamples must resolve to the new container's
+        marker location id (looked up by source coords), not coordinates."""
+        samples = [
+            {
+                "_migration": {
+                    "subsample_locations": [
+                        {
+                            "subsample_global_id": "SS1",
+                            "container_global_id": "IC100",
+                            "parent_ctype": "IMAGE",
+                            "grid_col": 50,
+                            "grid_row": 75,
+                        }
+                    ]
+                }
+            }
+        ]
+        # Map the old ids to new ones, and have the new container expose markers.
+        empty_state.id_map["SS1"] = "SS500"
+        empty_state.id_map["IC100"] = "IC900"
+        mock_inv.get_container_by_id.return_value = {
+            "globalId": "IC900",
+            "locations": [
+                {"id": 9001, "coordX": 50, "coordY": 75},
+                {"id": 9002, "coordX": 100, "coordY": 200},
+            ],
+        }
+
+        migrate._import_subsample_placements(mock_inv, samples, empty_state, dry_run=False)
+
+        mock_inv.add_items_to_image_container.assert_called_once()
+        kwargs = mock_inv.add_items_to_image_container.call_args.kwargs
+        assert kwargs["items_to_move"] == ["SS500"]
+        assert kwargs["location_ids"] == [9001]  # the marker at (50, 75)
+        mock_inv.add_items_to_list_container.assert_not_called()
+
+    def test_image_parent_no_matching_marker(self, mock_inv, empty_state):
+        """If the source coords don't match a marker on the new container,
+        record an error and don't place."""
+        samples = [
+            {
+                "_migration": {
+                    "subsample_locations": [
+                        {
+                            "subsample_global_id": "SS1",
+                            "container_global_id": "IC100",
+                            "parent_ctype": "IMAGE",
+                            "grid_col": 999,
+                            "grid_row": 999,
+                        }
+                    ]
+                }
+            }
+        ]
+        empty_state.id_map["SS1"] = "SS500"
+        empty_state.id_map["IC100"] = "IC900"
+        mock_inv.get_container_by_id.return_value = {
+            "locations": [{"id": 9001, "coordX": 50, "coordY": 75}],
+        }
+
+        migrate._import_subsample_placements(mock_inv, samples, empty_state, dry_run=False)
+
+        mock_inv.add_items_to_image_container.assert_not_called()
+        assert any("no marker" in e for e in empty_state.errors)
 
 
 # ---------------------------------------------------------------------------
