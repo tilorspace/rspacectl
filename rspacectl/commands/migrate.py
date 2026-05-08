@@ -364,13 +364,43 @@ def _export_attachment_extra_fields(inv, item: Dict, item_dir: Path) -> List[Dic
     return meta
 
 
-def _export_preview_image(inv, item: Dict, images_dir: Path) -> Optional[str]:
+def _preview_image_url(item: Dict) -> Optional[str]:
+    """Return the preview-image URL for an item, or None if no image link exists.
+
+    Prefers the full-resolution ``rel=image`` link; falls back to ``thumbnail``.
+    """
+    return _find_link(item, "image") or _find_link(item, "thumbnail")
+
+
+def _preview_image_hash(url: str) -> Optional[str]:
+    """Extract the content-addressed hash from an RSpace preview-image URL.
+
+    URLs have the form ``…/files/image/{hash}``.  The hash is identical
+    whenever two items share the same image content (RSpace's image storage
+    is content-addressed), which lets us identify default-thumbnail reuse.
+    Returns None if the URL does not match the expected pattern.
+    """
+    if not url:
+        return None
+    marker = "/files/image/"
+    idx = url.find(marker)
+    if idx == -1:
+        return None
+    candidate = url[idx + len(marker):].split("?", 1)[0].split("/", 1)[0]
+    return candidate or None
+
+
+def _export_preview_image(
+    inv,
+    item: Dict,
+    images_dir: Path,
+    skip_hashes: Optional[Set[str]] = None,
+) -> Optional[str]:
     """Download the preview image for an inventory item (SA/SS/IC/IT).
 
-    The image link appears in the item's ``links`` array only when a preview
-    image has been set *and* the API includes it in GET responses.  In practice
-    the link is sometimes absent even when an image exists, so we fall back to
-    probing candidate URLs derived from the globalId.
+    Skips download when the URL's image-hash is in ``skip_hashes`` — used
+    to filter out RSpace's default thumbnails (the same hash gets served
+    for every item that hasn't had a custom image uploaded).
 
     A 404 means no image is set; any other error is warned.
     Returns the local filename relative to images_dir, or None.
@@ -383,10 +413,14 @@ def _export_preview_image(inv, item: Dict, images_dir: Path) -> Optional[str]:
 
     # The image URL is a hash-based path (/files/image/{hash}) that cannot be
     # constructed from the globalId — we rely entirely on the _links array.
-    # Prefer "image" (full resolution); fall back to "thumbnail".
-    url = _find_link(item, "image") or _find_link(item, "thumbnail")
+    url = _preview_image_url(item)
     if not url:
         return None
+
+    if skip_hashes is not None:
+        h = _preview_image_hash(url)
+        if h and h in skip_hashes:
+            return None
 
     local_name = f"{gid}_preview.png"
     dest = images_dir / local_name
@@ -756,6 +790,29 @@ def _export_files(
 
     err_console.print("\n[bold]Exporting files…[/bold]")
 
+    # Identify default thumbnails: RSpace's image storage is content-addressed,
+    # so the same hash gets reused for every item that hasn't had a custom
+    # preview uploaded. Hashes referenced by ≥2 items are almost certainly
+    # defaults; skip them to avoid round-tripping the same placeholder image
+    # for every sample/subsample/container in the snapshot.
+    all_items = (
+        list(templates)
+        + list(containers)
+        + list(samples)
+        + [ss for s in samples for ss in s.get("subSamples", [])]
+    )
+    hash_counts: Dict[str, int] = {}
+    for it in all_items:
+        h = _preview_image_hash(_preview_image_url(it) or "")
+        if h:
+            hash_counts[h] = hash_counts.get(h, 0) + 1
+    skip_hashes = {h for h, n in hash_counts.items() if n >= 2}
+    if skip_hashes:
+        err_console.print(
+            f"  [dim]Skipping {len(skip_hashes)} default thumbnail hash(es) "
+            f"shared by multiple items.[/dim]"
+        )
+
     # Total = templates + containers + samples + every subsample.  Used to
     # drive the progress bar so users see how far through file downloads we are.
     n_subsamples = sum(len(s.get("subSamples", [])) for s in samples)
@@ -775,7 +832,7 @@ def _export_files(
                 mig["attachments"] = att_meta
                 mig["attachment_extra_fields"] = ef_meta
 
-            preview_local = _export_preview_image(inv, tmpl, img_dir)
+            preview_local = _export_preview_image(inv, tmpl, img_dir, skip_hashes)
             if preview_local:
                 mig["preview_local"] = preview_local
 
@@ -795,7 +852,7 @@ def _export_files(
                 mig["attachments"] = att_meta
                 mig["attachment_extra_fields"] = ef_meta
 
-            preview_local = _export_preview_image(inv, c, img_dir)
+            preview_local = _export_preview_image(inv, c, img_dir, skip_hashes)
             if preview_local:
                 mig["preview_local"] = preview_local
 
@@ -816,7 +873,7 @@ def _export_files(
                 mig["attachments"] = att_meta
                 mig["attachment_extra_fields"] = ef_meta
 
-            preview_local = _export_preview_image(inv, sample, img_dir)
+            preview_local = _export_preview_image(inv, sample, img_dir, skip_hashes)
             if preview_local:
                 mig["preview_local"] = preview_local
             prog.advance(task)
@@ -831,7 +888,7 @@ def _export_files(
                     ss_mig["attachments"] = att_meta
                     ss_mig["attachment_extra_fields"] = ef_meta
 
-                preview_local = _export_preview_image(inv, ss, img_dir)
+                preview_local = _export_preview_image(inv, ss, img_dir, skip_hashes)
                 if preview_local:
                     ss_mig["preview_local"] = preview_local
                 prog.advance(task)

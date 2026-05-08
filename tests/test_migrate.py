@@ -21,6 +21,8 @@ from rspacectl.commands.migrate import (
     _field_updates_by_name,
     _find_link,
     _paginate,
+    _preview_image_hash,
+    _preview_image_url,
     _resolve_new_gid,
     _sanitise_template,
     _strip,
@@ -88,6 +90,35 @@ class TestFindLink:
         assert _find_link({}, "image") is None
         assert _find_link({"_links": None}, "image") is None
         assert _find_link({"_links": []}, "image") is None
+
+
+class TestPreviewImageUrlAndHash:
+    def test_url_from_image_link(self):
+        item = {"_links": [{"rel": "image", "link": "https://x/api/v1/files/image/HASH123"}]}
+        assert _preview_image_url(item) == "https://x/api/v1/files/image/HASH123"
+
+    def test_url_falls_back_to_thumbnail(self):
+        item = {"_links": [{"rel": "thumbnail", "link": "https://x/files/image/HT"}]}
+        assert _preview_image_url(item) == "https://x/files/image/HT"
+
+    def test_url_none_when_no_image_link(self):
+        item = {"_links": [{"rel": "self", "link": "https://x/self"}]}
+        assert _preview_image_url(item) is None
+
+    def test_hash_from_canonical_url(self):
+        url = "https://demos.researchspace.com/api/inventory/v1/files/image/abc123"
+        assert _preview_image_hash(url) == "abc123"
+
+    def test_hash_strips_query(self):
+        url = "https://x/files/image/abc123?foo=bar"
+        assert _preview_image_hash(url) == "abc123"
+
+    def test_hash_returns_none_for_unrelated_url(self):
+        assert _preview_image_hash("https://example.com/foo") is None
+
+    def test_hash_handles_empty_input(self):
+        assert _preview_image_hash("") is None
+        assert _preview_image_hash(None) is None
 
 
 class TestPaginate:
