@@ -31,7 +31,7 @@ Snapshot folder layout
       images/
         SA123_preview.png     — sample / subsample / container preview image
       icons/
-        IT12_icon.png         — template icon (iconId); NT… for instrument templates
+        IT12_icon             — template icon (iconId); NT… for instrument templates
       image_containers/
         IC678_background.png  — IMAGE container background image
         IC678_locations.json  — [{coordX, coordY}] marker positions

@@ -23,8 +23,8 @@ import typer
 from rich.table import Table
 
 from ..context import get_context
-from ..exceptions import handle_api_error
-from ..ids import parse_id, resource_type
+from ..exceptions import exit_with_error, handle_api_error
+from ..ids import check_id_type, parse_id, resource_type
 from ..output import (
     COL_CREATED,
     COL_GLOBAL_ID,
@@ -38,6 +38,7 @@ from ..output import (
     print_result,
     print_single,
 )
+from ..utils import get_container
 
 # ---------------------------------------------------------------------------
 # Column definitions
@@ -138,7 +139,7 @@ def _get_container(id: str, include_content: bool = False) -> None:
         COL_OWNER,
     ]
     try:
-        result = ctx.inv.get_container_by_id(parse_id(id), include_content=include_content)
+        result = get_container(ctx.inv, id, include_content=include_content)
     except Exception as e:
         handle_api_error(e)
     print_single(result, ctx.output, columns)
@@ -432,6 +433,12 @@ def get(
             err=True,
         )
         raise typer.Exit(1)
+
+    if id is not None:
+        try:
+            check_id_type(actual_id, rtype)
+        except ValueError as e:
+            exit_with_error(str(e))
 
     # ---- invoke handler with applicable flags -----------------------
     if rtype in _CONTENT_TYPES:

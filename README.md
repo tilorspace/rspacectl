@@ -8,12 +8,12 @@ A command-line interface for [RSpace](https://www.researchspace.com/) covering b
 
 - **Verb-first command structure** — `rspace list documents`, `rspace get SA123`, `rspace create sample`
 - **Full ELN coverage** — documents, notebooks, folders, forms, files, groups, users, activity
-- **Full Inventory coverage** — samples, subsamples, containers, templates, workbenches
-- **Smart `get` command** — infers resource type from GlobalID prefix (`SD`, `SA`, `SS`, `IC`, …)
+- **Full Inventory coverage** — samples, subsamples, containers, sample templates, instruments, instrument templates, workbenches
+- **Smart `get` command** — infers resource type from GlobalID prefix (`SD`, `SA`, `SS`, `IC`, `IN`, …), and refuses an ID whose prefix doesn't match an explicit type
 - **Tagging** — set tags on any resource type with a single `rspace tag` command
-- **Inventory snapshots** — `rspace migrate export` / `import` to move whole inventories, individual containers (with full subtree), templates, or samples between RSpace instances. Preserves attachments, preview images, IMAGE-container backgrounds, and the container hierarchy.
+- **Inventory snapshots** — `rspace migrate export` / `import` to move whole inventories, individual containers (with full subtree), templates, samples, instruments, or instrument templates between RSpace instances. Preserves attachments, preview images, IMAGE-container backgrounds, and the container hierarchy.
 - **Multiple output formats** — rich tables (default), JSON, CSV, quiet (IDs only, for piping)
-- **Pagination** — all list commands support `--page` / `--page-size` with a result footer
+- **Pagination** — paginated list commands support `--page` / `--page-size` with a result footer
 - **Named profiles** — manage multiple RSpace instances with `--profile`
 - **Keychain storage** — store credentials in the OS keychain, never in a plain-text file
 
@@ -26,10 +26,16 @@ A command-line interface for [RSpace](https://www.researchspace.com/) covering b
 
 The package is not yet published to PyPI. Install it directly from the repository using Poetry or pip.
 
+To install a tagged release without cloning (see [Releases](https://github.com/tilorspace/rspacectl/releases)):
+
+```bash
+pip install git+https://github.com/tilorspace/rspacectl.git@v0.1.0
+```
+
 ### Option A — Poetry (recommended for development)
 
 ```bash
-git clone https://github.com/rspace-os/rspacectl.git
+git clone https://github.com/tilorspace/rspacectl.git
 cd rspacectl
 poetry install
 ```
@@ -50,7 +56,7 @@ rspace --help
 ### Option B — pip editable install
 
 ```bash
-git clone https://github.com/rspace-os/rspacectl.git
+git clone https://github.com/tilorspace/rspacectl.git
 cd rspacectl
 pip install -e .
 rspace --help
@@ -127,7 +133,7 @@ rspace status
 
 ### Output formats
 
-Every command accepts `-o` / `--output`:
+`-o` / `--output` is a global option, so it goes **before** the command name (`rspace -o json get SD123`):
 
 | Format | Flag | Description |
 |--------|------|-------------|
@@ -138,7 +144,7 @@ Every command accepts `-o` / `--output`:
 
 ```bash
 # Pipe document IDs into another command
-rspace list documents -o quiet | xargs -I{} rspace get {}
+rspace -o quiet list documents | xargs -I{} rspace get {}
 ```
 
 ---
@@ -158,6 +164,8 @@ rspace list samples --query "buffer" --owned-by alice --page 0 --page-size 20
 rspace list subsamples --query "aliquot"
 rspace list containers --query "freezer"
 rspace list templates
+rspace list instruments --query "confocal" --owned-by alice
+rspace list instrument-templates
 rspace list files --type document
 
 rspace list forms
@@ -188,6 +196,8 @@ rspace get SS202          # subsample
 rspace get IC303          # container
 rspace get BE404          # workbench
 rspace get IT505          # sample template
+rspace get IN808          # instrument
+rspace get NT909          # instrument template
 rspace get FM606          # form
 rspace get GL707          # gallery file
 ```
@@ -195,9 +205,12 @@ rspace get GL707          # gallery file
 For plain numeric IDs, provide the type explicitly:
 
 ```bash
-rspace get document 123
-rspace get sample   456
+rspace get document   123
+rspace get sample     456
+rspace get instrument 808
 ```
+
+When you give both a type and a GlobalID, the prefix must match the type. A mismatch such as `rspace get subsample SA905` exits with an error instead of quietly fetching `SS905`. Containers and workbenches (`IC` / `BE`) are interchangeable, and so are folders and notebooks (`FL` / `NB`). The same check applies to `update`, `delete`, `split`, and `move --target`.
 
 Additional flags for richer output:
 
@@ -225,14 +238,24 @@ rspace create sample --name "Buffer A" --template IT101   # use a template
 rspace create sample --name "Enzyme X" --template IT101 \
     --field "pH=7.4" --field "Source=Commercial"
 
+rspace create sample --name "Buffer B" --quantity 50 --unit 3 --expiry 2027-12-31
 rspace create sample --from-csv samples.csv   # bulk create from CSV
 
 rspace create container --name "Freezer 1" --type list
 rspace create container --name "Box A"     --type grid --rows 9 --cols 9
 
+# instruments (default instrument template if --template is omitted;
+# stored on your workbench unless --target is given)
+rspace create instrument --name "Confocal 1" --template NT12 \
+    --field "Manufacturer=Zeiss" --tag "microscopy" --target IC34 --row 1 --col 2
+rspace create instrument-template --from-file confocal_template.json
+rspace create template --from-file buffer_template.json   # sample template
+
 rspace create user --username jdoe --email j.doe@example.com \
     --first-name Jane --last-name Doe        # sysadmin only; prompts for password
 ```
+
+`--expiry` takes a date (`YYYY-MM-DD`). `--unit` is a numeric RSpace unit ID.
 
 ---
 
@@ -249,9 +272,16 @@ rspace update document SD123 --append "<p>Addendum</p>" --field-index 2
 
 rspace update sample SA456 --name "Buffer A v2" --description "pH 7.4"
 rspace update sample SA456 --tag "reagent,validated"
+
+# Instruments: name, description, tags, template field values
+rspace update instrument IN12 --field "Serial Number=SN-42" --tag "lab,confocal"
+rspace update instrument IN12 --latest-template      # move to the template's latest version
+
+# Move all your instruments made from a template to its latest version
+rspace update instrument-template NT3 --propagate
 ```
 
-`--field-id` targets a field by its numeric ID (use `rspace get SD123 -o json` to find IDs).
+`--field-id` targets a field by its numeric ID (use `rspace -o json get SD123` to find IDs).
 `--field-index` targets a field by 0-based position (for `--append` / `--prepend`).
 
 ---
@@ -265,6 +295,7 @@ rspace tag SA789 "reagent,validated"
 rspace tag SS101 "aliquot,stock"
 rspace tag IC202 "freezer,-80C"
 rspace tag IT303 "template,approved"
+rspace tag IN404 "microscopy,shared"
 ```
 
 Accepts any GlobalID — the resource type is inferred from the prefix. Replaces all existing tags.
@@ -275,10 +306,15 @@ Accepts any GlobalID — the resource type is inferred from the prefix. Replaces
 
 ```bash
 rspace delete document SD123 SD456 SD789   # batch delete
-rspace delete sample    SA101
-rspace delete subsample SS202 SS203
-rspace delete container IC303
+rspace delete sample     SA101
+rspace delete container  IC303
+rspace delete instrument IN404
+rspace delete instrument-template NT5
+rspace delete form       FM606              # only forms in NEW state
+rspace delete folder     FL789 NB456        # folders or notebooks
 ```
+
+Every ID in a batch is checked against the type first: if any one doesn't match (e.g. `rspace delete sample SA1 IC2`), nothing is deleted. A sample can't be deleted while any of its subsamples is stored in a container; move them to your workbench first. If the server refuses a delete, the command reports it and exits with status 1.
 
 ---
 
@@ -286,8 +322,9 @@ rspace delete container IC303
 
 ```bash
 rspace search "CRISPR protocol"
-rspace search "buffer" --type inventory
-rspace search "PCR"    --type eln
+rspace search "buffer" --type samples
+rspace search "PCR"    --type documents
+rspace search "zeiss"  --type instruments
 ```
 
 ---
@@ -304,6 +341,9 @@ rspace move SS101 SS102 --target IC404 --strategy column
 
 # Grid container — exact placement
 rspace move SS101 --target IC404 --row 2 --col 3
+
+# Instruments (fill free grid cells; move them separately from other items)
+rspace move IN12 IN13 --target IC404 --strategy row
 ```
 
 ---
@@ -329,16 +369,18 @@ rspace download attachment IF707 --output-dir ./downloads
 ### `split` — split a subsample
 
 ```bash
-rspace split SS202 --count 4                      # split into 4 equal parts
-rspace split SS202 --count 4 --target IC303       # split and place in container
+rspace split SS202 --count 4                  # 4 new subsamples; 5 equal parts in total
+rspace split SS202 --count 3 --quantity 10.0   # 3 new subsamples of 10 each; SS202 keeps the rest
 ```
+
+`--quantity` is in the subsample's current unit (see `rspace get SS202`).
 
 ---
 
 ### `share` — share a document with a group
 
 ```bash
-rspace share SD123 --group-id 5 --permission read
+rspace share SD123 SD124 --group 5 --permission edit
 ```
 
 ---
@@ -370,7 +412,7 @@ Take a snapshot of inventory on one server and recreate it on another. Useful fo
 - **Full migrations** — move everything when consolidating instances or upgrading
 - **Snapshots** — keep a local file-system copy of an inventory subtree
 
-Templates, containers (full hierarchy), samples, subsamples, attachments, preview images, template icons, and IMAGE-container backgrounds with marker locations are all preserved.
+Sample templates, instrument templates, containers (full hierarchy), samples, subsamples, instruments (with their container placements), attachments, preview images, template icons, and IMAGE-container backgrounds with marker locations are all preserved.
 
 ```bash
 # Selective: a single container and everything inside it
@@ -379,6 +421,9 @@ rspace --profile target migrate import  ./freezer_a
 
 # Selective: pick specific templates and samples (referenced templates auto-included)
 rspace --profile source migrate export --template IT5 --sample SA42 --output ./partial
+
+# Selective: instruments (their instrument templates are auto-included)
+rspace --profile source migrate export --instrument IN12 --instrument-template NT3 --output ./lab_kit
 
 # Multiple selectors compose
 rspace --profile source migrate export \
@@ -393,32 +438,37 @@ rspace --profile target migrate import  ./full_snapshot
 rspace --profile target migrate import ./freezer_a --dry-run
 ```
 
-When you select a container, the entire subtree (sub-containers, subsamples, and the parent samples those subsamples belong to) is included automatically. When you select samples, the templates they depend on are pulled in too.
+When you select a container, the entire subtree (sub-containers, subsamples, and the parent samples those subsamples belong to) is included automatically. When you select samples or instruments, the templates they depend on are pulled in too.
 
 #### Snapshot folder layout
 
 ```
 my_snapshot/
-  snapshot.json           inventory data (templates, containers, samples)
-  attachments/SA123/...   per-item file attachments
-  images/SA123_preview.png  preview images for samples / subsamples / containers / templates
-  icons/IT12_icon         template icons
+  snapshot.json           inventory data (templates, instrument templates, containers,
+                          samples, instruments)
+  attachments/SA123/...   per-item file attachments (also IN… for instruments)
+  images/SA123_preview.png  preview images for samples / subsamples / containers /
+                          templates / instruments
+  icons/IT12_icon         template icons (NT… for instrument templates)
   image_containers/       IMAGE-container backgrounds + marker positions
   checkpoint.json         created during import; auto-deleted on success
 ```
 
-#### Eight-phase import
+#### Eleven-phase import
 
 The importer runs in ordered phases, writing a checkpoint after each so an interrupted run can resume cleanly:
 
-1. **Templates** — created with id-mapping recorded
-2. **Containers (flat)** — all containers created at the top level (IMAGE containers get their background image + markers via a separate PUT)
-3. **Container hierarchy** — containers moved into their parents
-4. **Samples** — created from the mapped template; field values, tags, subsample names, quantities, notes restored
-5. **Subsample placements** — subsamples moved to their original containers (grid coords for GRID, marker index for IMAGE)
-6. **Attachments** — files re-uploaded to their new owner globalIds
-7. **Preview images** — `set_image` called for templates / samples / subsamples / containers (default thumbnails are deduplicated)
-8. **Template icons** — `set_sample_template_icon` called per template
+1. **Sample templates**: created, with old→new IDs recorded
+2. **Instrument templates**: an identical template already on the target (same name, description and fields) is reused; otherwise one is created. Use `--no-reuse-templates` to always create
+3. **Containers (flat)**: all containers created at the top level. IMAGE containers get their background image and markers
+4. **Container hierarchy**: containers moved into their parents
+5. **Samples**: created from the mapped template; field values, tags, subsample names, quantities and notes restored
+6. **Instruments**: created from the mapped instrument template with field values, tags, extra fields and barcodes (identifiers such as PIDINST DOIs are not migrated)
+7. **Subsample placements**: subsamples moved to their original containers (grid coords for GRID, marker index for IMAGE)
+8. **Instrument placements**: instruments moved to their original container, grid cell or marker
+9. **Attachments**: files re-uploaded to their new owners
+10. **Preview images**: set for templates, samples, subsamples, containers and instruments (default thumbnails are deduplicated)
+11. **Template icons**: sample and instrument template icons (skipped for reused instrument templates)
 
 ```bash
 # Resume an interrupted import
@@ -427,6 +477,7 @@ rspace migrate import ./freezer_a --checkpoint ./freezer_a/checkpoint.json
 # Skip phases (e.g. data-only, no files)
 rspace migrate import ./freezer_a --skip-files
 rspace migrate import ./freezer_a --skip-templates --skip-containers
+rspace migrate import ./freezer_a --skip-instruments
 
 # Data-only export (no attachments / images / icons)
 rspace migrate export --container IC123 --output ./data_only --no-files
@@ -435,7 +486,7 @@ rspace migrate export --container IC123 --output ./data_only --no-files
 #### Notes
 
 - **`--output` semantics differ from other commands**: in `migrate export`, `--output` is the snapshot *directory* (not an output format). The `-o` / `--output` table/json/csv/quiet flag does not apply.
-- **Workbench items** (`BE` prefix) cannot be migrated — workbenches are per-user. Subsamples on a source workbench are reported and remain unplaced after import.
+- **Workbench items** (`BE` prefix) cannot be migrated — workbenches are per-user. Subsamples and instruments that sat on a source workbench are reported; they are not placed in any container and stay on the importing user's workbench.
 - **Selecting a container pulls its full subtree.** Sub-containers, subsamples, and the parent samples those subsamples belong to are auto-included so the imported subtree is internally consistent.
 - **Backward compat**: legacy plain-JSON snapshots produced before the directory format are still importable via `rspace migrate import old_snapshot.json` (no attachments will be restored).
 - **Default thumbnails are skipped**: RSpace's content-addressed image storage reuses the same hash for every item without a custom preview, so the migrator deduplicates these to avoid re-uploading hundreds of identical placeholders.
@@ -453,6 +504,8 @@ rspace migrate export --container IC123 --output ./data_only --no-files
 | `SS`   | Subsample                   |
 | `IC`   | Container                   |
 | `IT`   | Sample template             |
+| `IN`   | Instrument                  |
+| `NT`   | Instrument template         |
 | `IF`   | Inventory file (attachment) |
 | `FM`   | Form                        |
 | `GL`   | Gallery file                |
@@ -471,6 +524,12 @@ poetry install -E keychain
 
 # Run tests
 poetry run pytest
+
+# Live end-to-end checks against a local RSpace (localhost only; each creates
+# and deletes rspacectl-review-e2e-* items)
+poetry run python scripts/e2e_review_fixes.py [--profile NAME]
+poetry run python scripts/e2e_instruments.py [--profile NAME]
+poetry run python scripts/e2e_migrate_instruments.py [--profile NAME]
 
 # Format and lint
 poetry run black rspacectl tests

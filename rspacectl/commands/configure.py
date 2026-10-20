@@ -22,7 +22,7 @@ def configure(
     keychain: bool = typer.Option(
         False, "--keychain",
         help="Store credentials in the OS keychain instead of a dotenv file. "
-             "Requires: pip install rspacectl[keychain]",
+             "Requires: pip install 'rspacectl\\[keychain]'",
     ),
     list_: bool = typer.Option(
         False, "--list", "-l",

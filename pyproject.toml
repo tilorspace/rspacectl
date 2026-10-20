@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "rspacectl"
-version = "0.1.0"
+version = "0.2.0"
 description = "Command-line interface for RSpace ELN and Inventory"
 authors = ["ResearchSpace <info@researchspace.com>"]
 license = "Apache-2.0"

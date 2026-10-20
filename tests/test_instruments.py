@@ -83,11 +83,14 @@ class TestListInstruments:
         assert "BE5963780" in out
 
     def test_query_uses_instrument_search(self, app_context, mock_inv):
-        mock_inv.search.return_value = {"records": [INSTRUMENT], "totalHits": 1}
+        mock_inv.retrieve_api_results.return_value = {"records": [INSTRUMENT], "totalHits": 1}
         list_cmd.list_instruments(**_list_kwargs(query="microscope"))
 
-        mock_inv.search.assert_called_once()
-        assert mock_inv.search.call_args.kwargs["result_type"] is ResultType.INSTRUMENT
+        path = mock_inv.retrieve_api_results.call_args.args[0]
+        params = mock_inv.retrieve_api_results.call_args.kwargs["params"]
+        assert path == "/search"
+        assert params["query"] == "microscope"
+        assert params["resultType"] == ResultType.INSTRUMENT.name
         mock_inv.list_instruments.assert_not_called()
 
     def test_lists_instrument_templates(self, app_context, mock_inv, capsys):
@@ -374,11 +377,13 @@ class TestMoveInstruments:
 class TestDeleteAndTag:
     def test_delete_instruments(self, app_context, mock_inv):
         delete.delete_instrument(["IN1", "2"])
-        assert [c.args[0] for c in mock_inv.delete_instrument.call_args_list] == [1, 2]
+        assert [c.args for c in mock_inv.doDelete.call_args_list] == [
+            ("instruments", 1), ("instruments", 2)
+        ]
 
     def test_delete_instrument_template(self, app_context, mock_inv):
         delete.delete_instrument_template(["NT3"])
-        mock_inv.delete_instrument_template.assert_called_once_with(3)
+        mock_inv.doDelete.assert_called_once_with("instrumentTemplates", 3)
 
     def test_delete_container_uses_relative_path(self, app_context, mock_inv):
         # doDelete prepends "/", so a leading slash produced //containers (404).

@@ -1275,13 +1275,19 @@ def migrate_import(
             "Defaults to <snapshot_dir>/checkpoint.json."
         ),
     ),
-    skip_templates: bool = typer.Option(False, "--skip-templates", help="Skip Phase 1."),
-    skip_containers: bool = typer.Option(False, "--skip-containers", help="Skip Phases 2 & 3."),
-    skip_samples: bool = typer.Option(False, "--skip-samples", help="Skip Phases 4 & 5."),
-    skip_instruments: bool = typer.Option(
-        False, "--skip-instruments", help="Skip instrument templates, instruments and their placements."
+    skip_templates: bool = typer.Option(
+        False, "--skip-templates", help="Skip sample and instrument templates (Phases 1-2)."
     ),
-    skip_files: bool = typer.Option(False, "--skip-files", help="Skip attachments, images and icons."),
+    skip_containers: bool = typer.Option(
+        False, "--skip-containers", help="Skip containers and their hierarchy (Phases 3-4)."
+    ),
+    skip_samples: bool = typer.Option(
+        False, "--skip-samples", help="Skip samples and subsample placements (Phases 5, 7)."
+    ),
+    skip_instruments: bool = typer.Option(
+        False, "--skip-instruments", help="Skip instrument templates, instruments and their placements (Phases 2, 6, 8)."
+    ),
+    skip_files: bool = typer.Option(False, "--skip-files", help="Skip attachments, images and icons (Phases 9-11)."),
     no_reuse_templates: bool = typer.Option(
         False,
         "--no-reuse-templates",
