@@ -41,7 +41,9 @@ def delete_document(
 ) -> None:
     """Delete one or more ELN documents."""
     ctx = get_context()
-    _batch_delete(ids, ctx.eln.delete_document, "document", "document")
+    # rspace-client's delete_document requests "//documents/{id}", which 404s
+    # (rspace-client 2.7.4); call the endpoint directly.
+    _batch_delete(ids, lambda id_: ctx.eln.doDelete("documents", id_), "document", "document")
 
 
 @app.command("sample")

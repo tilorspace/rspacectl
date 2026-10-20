@@ -138,10 +138,26 @@ def _get_container(id: str, include_content: bool = False) -> None:
         COL_OWNER,
     ]
     try:
-        result = ctx.inv.get_container_by_id(parse_id(id), include_content=include_content)
+        if resource_type(str(id)) == "bench":
+            result = _fetch_workbench(ctx.inv, parse_id(id), include_content)
+        else:
+            try:
+                result = ctx.inv.get_container_by_id(parse_id(id), include_content=include_content)
+            except Exception as e:
+                # /containers/{id} refuses workbenches (HTTP 422); a plain
+                # numeric ID can still be one.
+                if not str(id).strip().isdigit() or "is a workbench" not in str(e):
+                    raise
+                result = _fetch_workbench(ctx.inv, parse_id(id), include_content)
     except Exception as e:
         handle_api_error(e)
     print_single(result, ctx.output, columns)
+
+
+def _fetch_workbench(inv, bench_id: int, include_content: bool) -> dict:
+    """GET /workbenches/{id}; the client has no single-workbench getter."""
+    flag = "true" if include_content else "false"
+    return inv.retrieve_api_results(f"/workbenches/{bench_id}?includeContent={flag}")
 
 
 def _get_form(id: str) -> None:

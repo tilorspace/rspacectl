@@ -74,9 +74,9 @@ class TestGetTypeMismatch:
         get_cmd.get("sample", "905", subsamples=False, content=False)
         mock_inv.get_sample_by_id.assert_called_once_with(905)
 
-    def test_bench_id_with_container_type(self, app_context, mock_inv):
-        mock_inv.get_container_by_id.return_value = {"id": 1, "globalId": "BE1"}
-        get_cmd.get("container", "BE1", subsamples=False, content=False)
+    def test_container_id_with_bench_type(self, app_context, mock_inv):
+        mock_inv.get_container_by_id.return_value = {"id": 1, "globalId": "IC1"}
+        get_cmd.get("bench", "IC1", subsamples=False, content=False)
         mock_inv.get_container_by_id.assert_called_once_with(1, include_content=False)
 
 
@@ -224,3 +224,49 @@ class TestCreateSampleQuantity:
         create.create_sample(**_sample_kwargs(quantity=1.5, unit=3))
         qty = mock_inv.create_sample.call_args.kwargs["total_quantity"]
         assert qty._toDict() == {"numericValue": 1.5, "unitId": 3}
+
+
+# ---------------------------------------------------------------------------
+# Found by the live end-to-end run (scripts/e2e_review_fixes.py)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteDocumentEndpoint:
+    def test_uses_documents_endpoint_without_double_slash(self, app_context, mock_eln):
+        delete.delete_document(["SD5"])
+        mock_eln.doDelete.assert_called_once_with("documents", 5)
+        mock_eln.delete_document.assert_not_called()
+
+
+class TestGetWorkbench:
+    BENCH = {"id": 2, "globalId": "BE2", "name": "WB alice", "cType": "WORKBENCH"}
+
+    @pytest.mark.parametrize("args", [("BE2", None), ("container", "BE2"), ("bench", "BE2")])
+    def test_be_prefix_uses_workbench_endpoint(self, app_context, mock_inv, args):
+        mock_inv.retrieve_api_results.return_value = self.BENCH
+        get_cmd.get(*args, subsamples=False, content=False)
+        mock_inv.retrieve_api_results.assert_called_once_with("/workbenches/2?includeContent=false")
+        mock_inv.get_container_by_id.assert_not_called()
+
+    def test_content_flag_is_passed(self, app_context, mock_inv):
+        mock_inv.retrieve_api_results.return_value = self.BENCH
+        get_cmd.get("BE2", None, subsamples=False, content=True)
+        mock_inv.retrieve_api_results.assert_called_once_with("/workbenches/2?includeContent=true")
+
+    def test_numeric_container_id_falls_back_to_workbench(self, app_context, mock_inv):
+        mock_inv.get_container_by_id.side_effect = Exception("Container with id 2 is a workbench")
+        mock_inv.retrieve_api_results.return_value = self.BENCH
+        get_cmd.get("container", "2", subsamples=False, content=False)
+        mock_inv.retrieve_api_results.assert_called_once_with("/workbenches/2?includeContent=false")
+
+    def test_ic_prefix_does_not_fall_back(self, app_context, mock_inv):
+        mock_inv.get_container_by_id.side_effect = Exception("Container with id 2 is a workbench")
+        with pytest.raises(typer.Exit):
+            get_cmd.get("IC2", None, subsamples=False, content=False)
+        mock_inv.retrieve_api_results.assert_not_called()
+
+    def test_other_container_errors_are_reported(self, app_context, mock_inv):
+        mock_inv.get_container_by_id.side_effect = Exception("not found")
+        with pytest.raises(typer.Exit):
+            get_cmd.get("container", "2", subsamples=False, content=False)
+        mock_inv.retrieve_api_results.assert_not_called()
