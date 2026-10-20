@@ -40,10 +40,12 @@ Source: `rspace_api_inventory_specs_2_27_0.yaml`, served by the RSpace apiDocs p
   `parentContainers`/`parentLocation` from `InventoryRecordInfo`. But the POST description and
   examples never mention placement; only `importPidinst` documents a `newTargetLocation`.
   **So placement at creation is probably accepted, but the docs don't promise it.**
-  Decision: create first, then move with `PUT`. That path is documented and works either way.
-  During implementation, run one live test against a dev/test server (with your OK). If POST
-  placement works, `create instrument --target` can send it in one call, keeping the PUT path as
-  the fallback.
+  **Verified live (local RSpace 2.27.0, 2026-10-20):** POST with `parentContainers` places the
+  instrument in a LIST container. POST with `parentContainers` + `parentLocation {coordX, coordY}`
+  places it in the right GRID cell. PUT moves it bench → GRID cell → LIST. The client's
+  `add_items_to_list_container` still rejects `IN` IDs. New containers report `canStoreInstruments: true`.
+  Decision: `create instrument --target` sends the location in the POST (one call). Migrate keeps a
+  separate placement phase (PUT) so placement survives resume and stays parallel to subsamples.
 - One helper, `_place_instrument(inv, gid, container_id, location=None)`, in `rspacectl/utils.py`.
   Both `rspace move` and the migrate placement phase use it. An upstream rspace-client PR making
   `Id.is_movable()` accept `IN` is a nice-to-have, not a blocker.
@@ -171,8 +173,7 @@ Creating a copy on every import would multiply them, so phase 2 reuses an existi
 7. Optional: upstream rspace-client PR adding `IN` to `Id.is_movable()` and an `update_instrument` helper.
 
 ## Decisions (2026-10-20)
-1. Placement at creation: checked against the 2.27 spec. Move-by-PUT is documented, placement in
-   POST is implied by the schema but not documented. Create, then PUT; one live check during implementation.
+1. Placement at creation: works (verified live). Used by `create instrument --target`; moves use PUT.
 2. Owner and sharing are not migrated.
 3. `restore`: later, for all inventory types together.
 4. Reuse an existing instrument template on import only when it is identical (section 2.5).
