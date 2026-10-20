@@ -440,3 +440,46 @@ class TestImportCommand:
         self._run(snap, skip_instruments=True)
         mock_inv.list_instrument_templates.assert_not_called()
         mock_inv.create_instrument_template.assert_not_called()
+
+
+class TestImageContainerImport:
+    """Markers go in the POST; a follow-up PUT (which clears tags) is only a fallback."""
+
+    def _snapshot_container(self, tmp_path):
+        ic_dir = tmp_path / "image_containers"
+        ic_dir.mkdir()
+        (ic_dir / "IC5_background.png").write_bytes(b"\x89PNG")
+        return {
+            "id": 5, "globalId": "IC5", "name": "Map", "cType": "IMAGE",
+            "tags": [{"value": "freezer"}],
+            "_migration": {"image_container": {
+                "background_local": "IC5_background.png",
+                "locations": [{"coordX": 10, "coordY": 10}, {"coordX": 40, "coordY": 60}],
+            }},
+        }
+
+    def _inv(self, persisted):
+        inv = MagicMock()
+        inv.create_image_container.return_value = {"id": 50, "globalId": "IC50"}
+        inv.get_container_by_id.return_value = {
+            "locations": [{"coordX": x, "coordY": y} for x, y in persisted]
+        }
+        return inv
+
+    def test_markers_in_post_no_put(self, tmp_path):
+        inv = self._inv([(10, 10), (40, 60)])
+        state = _ImportState()
+        migrate._import_containers_flat(inv, [self._snapshot_container(tmp_path)], state, False, tmp_path)
+        post = inv.create_image_container.call_args.args[0]
+        assert [(loc["coordX"], loc["coordY"]) for loc in post.data["locations"]] == [(10, 10), (40, 60)]
+        inv.add_locations_to_image_container.assert_not_called()
+        assert state.id_map["IC5"] == "IC50" and not state.errors
+
+    def test_fallback_adds_missing_markers_and_restores_tags(self, tmp_path):
+        inv = self._inv([(10, 10)])
+        state = _ImportState()
+        migrate._import_containers_flat(inv, [self._snapshot_container(tmp_path)], state, False, tmp_path)
+        assert inv.add_locations_to_image_container.call_args.args[1:] == ((40, 60),)
+        put = inv.retrieve_api_results.call_args
+        assert put.args[0] == "/containers/50"
+        assert put.kwargs["params"] == {"tags": [{"value": "freezer"}]}

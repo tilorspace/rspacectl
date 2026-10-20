@@ -18,7 +18,7 @@ from ...context import get_context
 from ...exceptions import warn
 from ...ids import parse_id
 from ...output import console, err_console
-from ...utils import place_instrument, set_item_image
+from ...utils import place_instrument, put_inventory_item, set_item_image
 from ._common import (
     SCHEMA_VERSION,
     _ImportState,
@@ -140,16 +140,16 @@ def _import_containers_flat(
                     from rspace_client.inv.inv import ImageContainerPost
                     locations = ic_meta.get("locations") or []
                     location_tuples = [(loc["coordX"], loc["coordY"]) for loc in locations]
-                    # Create the container without markers — the SDK's
-                    # ImageContainerPost emits them as plain {coordX, coordY}
-                    # entries, but the API requires {newLocationRequest: True,
-                    # coordX, coordY} (the form add_locations_to_image_container
-                    # uses on PUT).  The markers are silently dropped on POST.
-                    # Workaround: create empty, then add markers separately.
+                    # Markers go in the POST: they are persisted there. They only
+                    # *looked* dropped because GET /containers/{id} omits
+                    # ``locations`` unless includeContent=true. A follow-up PUT
+                    # (add_locations_to_image_container) would also clear the
+                    # container's tags, since the API wipes tags on any PUT
+                    # without them.
                     post = ImageContainerPost(
                         name=c["name"],
                         image_file=str(bg_path),
-                        locations=[],
+                        locations=location_tuples,
                         tags=tags,
                         description=desc,
                         extra_fields=extra_fields,
@@ -158,9 +158,14 @@ def _import_containers_flat(
                     )
                     new_c = inv.create_image_container(post)
                     if location_tuples:
-                        new_c = inv.add_locations_to_image_container(
-                            new_c, *location_tuples
-                        )
+                        created = inv.get_container_by_id(new_c["id"], include_content=True)
+                        have = {(m.get("coordX"), m.get("coordY")) for m in created.get("locations") or []}
+                        missing = [xy for xy in location_tuples if xy not in have]
+                        if missing:
+                            # Older servers: add the rest via PUT, then restore the tags.
+                            inv.add_locations_to_image_container(new_c, *missing)
+                            if tags:
+                                put_inventory_item(inv, "containers", new_c["id"], {"tags": tags})
                 else:
                     warn(
                         f"Container {old_gid} ({c['name']!r}) is an IMAGE container but "
