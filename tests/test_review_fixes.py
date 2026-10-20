@@ -360,3 +360,17 @@ class TestDeleteReportsRefusals:
     def test_none_response_counts_as_success(self, app_context, mock_inv):
         mock_inv.delete_instrument.return_value = None
         delete.delete_instrument(["IN5"])
+
+    def test_subsample_into_grid_cell(self, app_context, mock_inv):
+        from rspace_client.inv.inv import ByLocation
+
+        from rspacectl.commands import move
+
+        mock_inv.get_container_by_id.return_value = {
+            "cType": "GRID",
+            "gridLayout": {"columnsNumber": 3, "rowsNumber": 2},
+        }
+        move.move(["SS1"], target="IC5", strategy=None, row=2, col=1)
+        placement = mock_inv.add_items_to_grid_container.call_args.kwargs["grid_placement"]
+        assert isinstance(placement, ByLocation)
+        assert (placement.locations[0].x, placement.locations[0].y) == (1, 2)

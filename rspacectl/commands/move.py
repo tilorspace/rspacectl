@@ -78,7 +78,7 @@ def move(
             if strategy == "column":
                 placement = ByColumn(start_col, start_row, total_cols, total_rows, *ids)
             elif row and col:
-                placement = ByLocation(locations=[GridLocation(x=col, y=row)], *ids)
+                placement = ByLocation([GridLocation(x=col, y=row)], *ids)
             else:
                 placement = ByRow(start_col, start_row, total_cols, total_rows, *ids)
             result = ctx.inv.add_items_to_grid_container(
