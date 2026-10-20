@@ -12,7 +12,7 @@ from rspace_client.inv.inv import InstrumentPost, Quantity, SamplePost
 from rspace_client.inv.inv import Tag as InvTag
 
 from ..context import get_context
-from ..exceptions import handle_api_error, warn
+from ..exceptions import exit_with_error, handle_api_error, warn
 from ..ids import parse_id
 from ..output import (
     COL_CREATED,
@@ -173,7 +173,7 @@ def create_sample(
     ),
     unit: Optional[int] = typer.Option(None, "--unit", "-u", help="Unit ID (RSpace unit system)."),
     expiry: Optional[str] = typer.Option(
-        None, "--expiry", help="Expiry date (ISO format, e.g. 2025-12-31)."
+        None, "--expiry", help="Expiry date as YYYY-MM-DD (e.g. 2025-12-31)."
     ),
     tag: Optional[str] = typer.Option(None, "--tag", help="Comma-separated tags."),
     description: Optional[str] = typer.Option(None, "--description", "-d"),
@@ -201,6 +201,15 @@ def create_sample(
         _bulk_create_from_csv(ctx, from_csv, columns)
         return
 
+    # The API wants a plain date: a datetime is serialised with a time part
+    # and rejected with HTTP 400.
+    expiry_date = None
+    if expiry:
+        try:
+            expiry_date = datetime.date.fromisoformat(expiry)
+        except ValueError:
+            exit_with_error(f"Invalid --expiry '{expiry}': expected a date as YYYY-MM-DD.")
+
     field_values = _parse_fields(field or [])
 
     template_fields = []
@@ -217,11 +226,10 @@ def create_sample(
 
     try:
         total_quantity = (
-            Quantity(numericValue=quantity, unitId=unit)
+            Quantity(quantity, {"id": unit})
             if quantity is not None and unit is not None
             else None
         )
-        expiry_dt = datetime.datetime.fromisoformat(expiry) if expiry else None
 
         result = ctx.inv.create_sample(
             name=name,
@@ -229,7 +237,7 @@ def create_sample(
             description=description,
             sample_template_id=parse_id(template) if template else None,
             total_quantity=total_quantity,
-            expiry_date=expiry_dt,
+            expiry_date=expiry_date,
             subsample_count=subsample_count,
             fields=fields_post,
         )
