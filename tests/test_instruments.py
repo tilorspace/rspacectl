@@ -16,7 +16,11 @@ INSTRUMENT = {
     "created": "2026-07-03T14:34:40.000Z",
     "owner": {"username": "alice"},
     "parentContainers": [{"id": 5963780, "globalId": "BE5963780"}],
-    "fields": [{"name": "Serial number", "type": "string", "mandatory": True}],
+    "fields": [
+        {"name": "Serial number", "type": "string", "content": "SN-1234"},
+        {"name": "Mode", "type": "choice", "content": None, "selectedOptions": ["confocal"]},
+    ],
+    "extraFields": [{"name": "Room", "type": "text", "content": "B.204"}],
 }
 
 INSTRUMENT_TEMPLATE = {
@@ -104,7 +108,9 @@ class TestGetInstrument:
         mock_inv.get_instrument_by_id.assert_called_once_with(32768)
         out = capsys.readouterr().out
         assert "Confocal microscope" in out
-        assert "Serial number" in out
+        assert "SN-1234" in out
+        assert "confocal" in out
+        assert "B.204" in out
 
     def test_infers_instrument_template_from_prefix(self, app_context, mock_inv, capsys):
         mock_inv.get_instrument_template_by_id.return_value = INSTRUMENT_TEMPLATE

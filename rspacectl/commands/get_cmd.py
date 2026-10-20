@@ -189,6 +189,33 @@ def _print_template_fields(fields: list) -> None:
     console.print(table)
 
 
+def _field_value(f: dict) -> str:
+    """Display value of a filled-in inventory field (template or extra field)."""
+    if f.get("selectedOptions"):
+        return ", ".join(str(o) for o in f["selectedOptions"])
+    if f.get("attachment"):
+        return (f["attachment"] or {}).get("name") or "(attachment)"
+    content = f.get("content")
+    return "" if content is None else str(content)
+
+
+def _print_item_fields(fields: list, extra_fields: list) -> None:
+    """Print a table of field values, as stored on an item (not a template)."""
+    rows = [(f, "") for f in fields or []] + [(f, "extra") for f in extra_fields or []]
+    if not rows:
+        return
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("Field Name", min_width=20)
+    table.add_column("Type", min_width=10)
+    table.add_column("Value", min_width=20)
+    table.add_column("", min_width=5)
+    for f, kind in rows:
+        table.add_row(f.get("name", ""), f.get("type", ""), _field_value(f), kind)
+
+    console.print("\n[bold]Fields:[/bold]")
+    console.print(table)
+
+
 def _get_template(id: str) -> None:
     ctx = get_context()
     columns = [
@@ -228,7 +255,7 @@ def _get_instrument(id: str) -> None:
         return  # handle_api_error always exits, but be explicit
     print_single(result, ctx.output, columns)
     if ctx.output == OutputFormat.TABLE:
-        _print_template_fields(result.get("fields", []))
+        _print_item_fields(result.get("fields", []), result.get("extraFields", []))
 
 
 def _get_instrument_template(id: str) -> None:
