@@ -1,11 +1,30 @@
 """Tests for configuration loading."""
 
 import os
-from pathlib import Path
 
 import pytest
 
 from rspacectl.config import ConfigError, load_config, save_config
+
+
+@pytest.fixture(autouse=True)
+def isolated_config(tmp_path, monkeypatch):
+    """Isolate tests from the developer's real config.
+
+    - Redirects the profile directory to tmp_path, so ~/.rspacectl is never
+      read or (worse) overwritten by save_config.
+    - Disables the OS keychain lookup.
+    - Snapshots os.environ, because load_dotenv writes RSPACE_* straight into
+      it, bypassing monkeypatch.
+    """
+    monkeypatch.setattr("rspacectl.config._CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("rspacectl.config._load_from_keychain", lambda profile: (None, None))
+    saved_env = dict(os.environ)
+    for key in ("RSPACE_URL", "RSPACE_API_KEY"):
+        os.environ.pop(key, None)
+    yield tmp_path
+    os.environ.clear()
+    os.environ.update(saved_env)
 
 
 class TestLoadConfig:
@@ -29,30 +48,19 @@ class TestLoadConfig:
         assert url == "https://cli.example.com"
         assert key == "cli-key"
 
-    def test_raises_config_error_when_missing(self, monkeypatch):
-        monkeypatch.delenv("RSPACE_URL", raising=False)
-        monkeypatch.delenv("RSPACE_API_KEY", raising=False)
-        # Prevent reading actual ~/.rspacectl
-        with pytest.MonkeyPatch().context() as mp:
-            mp.setattr("rspacectl.config.CONFIG_FILE", Path("/nonexistent/path/.rspacectl"))
-            with pytest.raises(ConfigError, match="Missing configuration"):
-                load_config()
+    def test_raises_config_error_when_missing(self):
+        with pytest.raises(ConfigError, match="Missing configuration"):
+            load_config()
 
     def test_raises_on_missing_url_only(self, monkeypatch):
-        monkeypatch.delenv("RSPACE_URL", raising=False)
         monkeypatch.setenv("RSPACE_API_KEY", "some-key")
-        with pytest.MonkeyPatch().context() as mp:
-            mp.setattr("rspacectl.config.CONFIG_FILE", Path("/nonexistent/path/.rspacectl"))
-            with pytest.raises(ConfigError, match="RSPACE_URL"):
-                load_config()
+        with pytest.raises(ConfigError, match="RSPACE_URL"):
+            load_config()
 
 
 class TestSaveConfig:
-    def test_saves_and_loads(self, tmp_path, monkeypatch):
-        config_file = tmp_path / ".rspacectl"
-        monkeypatch.setattr("rspacectl.config.CONFIG_FILE", config_file)
-        monkeypatch.delenv("RSPACE_URL", raising=False)
-        monkeypatch.delenv("RSPACE_API_KEY", raising=False)
+    def test_saves_and_loads(self, isolated_config):
+        config_file = isolated_config / ".rspacectl"
 
         save_config("https://saved.example.com", "saved-key")
 
@@ -61,9 +69,8 @@ class TestSaveConfig:
         assert url == "https://saved.example.com"
         assert key == "saved-key"
 
-    def test_permissions_restricted(self, tmp_path, monkeypatch):
-        config_file = tmp_path / ".rspacectl"
-        monkeypatch.setattr("rspacectl.config.CONFIG_FILE", config_file)
+    def test_permissions_restricted(self, isolated_config):
+        config_file = isolated_config / ".rspacectl"
         save_config("https://example.com", "key")
         mode = oct(config_file.stat().st_mode)
         assert mode.endswith("600")
