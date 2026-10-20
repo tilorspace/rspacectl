@@ -32,7 +32,7 @@ from ...output import err_console
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3  # 3: adds instrument_templates + instruments
 _CHECKPOINT_SUFFIX = ".checkpoint"
 _SNAPSHOT_JSON = "snapshot.json"
 
@@ -253,8 +253,13 @@ def _preview_image_url(item: Dict) -> Optional[str]:
     """Return the preview-image URL for an item, or None if no image link exists.
 
     Prefers the full-resolution ``rel=image`` link; falls back to ``thumbnail``.
+    Links to the server's default icon (``…/icon/-1``, used by instruments and
+    instrument templates without a custom image) count as no image.
     """
-    return _find_link(item, "image") or _find_link(item, "thumbnail")
+    url = _find_link(item, "image") or _find_link(item, "thumbnail")
+    if url and url.split("?", 1)[0].rstrip("/").endswith("/icon/-1"):
+        return None
+    return url
 
 
 def _preview_image_hash(url: str) -> Optional[str]:
@@ -284,10 +289,13 @@ def _all_items_with_globalid(
     templates: List[Dict],
     containers: List[Dict],
     samples: List[Dict],
+    instrument_templates: Optional[List[Dict]] = None,
+    instruments: Optional[List[Dict]] = None,
 ) -> List[Tuple[str, Dict]]:
-    """Flatten templates + containers + samples (incl. subsamples) into
-    ``(globalId, item)`` pairs.  Used by phases 6/7/8 which iterate over
-    every inventory object that might carry per-item migration metadata.
+    """Flatten templates + containers + samples (incl. subsamples) + instrument
+    templates + instruments into ``(globalId, item)`` pairs.  Used by the file
+    phases, which iterate over every inventory object that might carry
+    per-item migration metadata.
     """
     return (
         [(t["globalId"], t) for t in templates]
@@ -298,4 +306,6 @@ def _all_items_with_globalid(
             for s in samples
             for ss in s.get("subSamples", [])
         ]
+        + [(t["globalId"], t) for t in instrument_templates or []]
+        + [(i["globalId"], i) for i in instruments or []]
     )

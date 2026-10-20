@@ -6,6 +6,7 @@ Export (source server):
 
     rspace migrate export --all --output my_snapshot/
     rspace migrate export --template IT1 --sample SA2 --output partial/
+    rspace migrate export --instrument IN5 --output instruments/
 
 Import (target server, different --profile):
 
@@ -19,16 +20,18 @@ Import (target server, different --profile):
 Snapshot folder layout
 -----------------------
     snapshot_dir/
-      snapshot.json           — inventory data (templates, containers, samples)
+      snapshot.json           — inventory data (templates, containers, samples,
+                                instrument templates, instruments)
       attachments/
         SA123/IF456_report.pdf
         SS234/IF111_cert.pdf
         IC345/IF222_label.pdf
         IT12/IF333_data.csv
+        IN56/IF444_manual.pdf
       images/
         SA123_preview.png     — sample / subsample / container preview image
       icons/
-        IT12_icon.png         — template icon (iconId)
+        IT12_icon.png         — template icon (iconId); NT… for instrument templates
       image_containers/
         IC678_background.png  — IMAGE container background image
         IC678_locations.json  — [{coordX, coordY}] marker positions
@@ -100,12 +103,15 @@ from ._export import (  # noqa: F401
     _export_attachment_extra_fields,
     _export_attachments,
     _export_containers,
+    _export_instrument_templates,
+    _export_instruments,
     _export_files,
     _export_image_container,
     _export_preview_image,
     _export_samples,
     _export_template_icon,
     _export_templates,
+    _item_location,
     _walk_container,
     migrate_export,
 )
