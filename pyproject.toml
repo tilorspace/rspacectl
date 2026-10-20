@@ -27,7 +27,7 @@ packages = [{include = "rspacectl"}]
 python = "^3.9"
 typer = ">=0.9"
 rich = ">=13.0"
-rspace-client = ">=2.6.2"
+rspace-client = ">=2.7.4"
 python-dotenv = ">=1.0"
 keyring = {version = ">=24.0", optional = true}
 
