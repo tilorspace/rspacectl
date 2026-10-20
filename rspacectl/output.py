@@ -188,7 +188,7 @@ def print_page_info(response: Dict[str, Any], count: int) -> None:
     page_size = response.get("pageSize", count)
     start = page * page_size + 1
     end = start + count - 1
-    console.print(
+    err_console.print(
         f"[dim]Showing {start}–{end} of {total}  (page {page}, use --page / --page-size to navigate)[/dim]"
     )
 
