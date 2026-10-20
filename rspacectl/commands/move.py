@@ -9,7 +9,7 @@ from ..context import get_context
 from ..exceptions import handle_api_error
 from ..ids import parse_id, resource_type
 from ..output import console, err_console
-from ..utils import batch_run, free_grid_cells, place_instrument
+from ..utils import batch_run, free_grid_cells, get_container, place_instrument
 
 _STRATEGY_CHOICES = ["row", "column"]
 
@@ -65,9 +65,10 @@ def move(
 
     try:
         target_id = parse_id(target)
-        container_info = ctx.inv.get_container_by_id(target_id)
+        container_info = get_container(ctx.inv, target)
         ctype = container_info.get("cType", "LIST")
-        grid_layout = container_info.get("gridLayout", {})
+        # LIST containers return "gridLayout": null, not a missing key.
+        grid_layout = container_info.get("gridLayout") or {}
         total_cols = grid_layout.get("columnsNumber", 10)
         total_rows = grid_layout.get("rowsNumber", 10)
 
@@ -115,7 +116,7 @@ def _move_instruments(
     """Move instruments one by one via PUT (the client's container helpers reject them)."""
     try:
         target_id = parse_id(target)
-        container = ctx.inv.get_container_by_id(target_id, include_content=True)
+        container = get_container(ctx.inv, target, include_content=True)
     except Exception as e:
         handle_api_error(e)
         return  # handle_api_error always exits, but be explicit

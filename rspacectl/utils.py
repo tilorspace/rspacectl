@@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Tuple, Type
 
 import typer
 
+from .ids import parse_id, resource_type
 from .output import err_console
 
 
@@ -175,3 +176,21 @@ def free_grid_cells(
         start = (start_row, start_col)
         key = lambda rc: rc  # noqa: E731
     return [rc for rc in order if key(rc) >= start and rc not in occupied]
+
+
+def get_container(inv, raw_id, include_content: bool = False) -> dict:
+    """Fetch a container or workbench by GlobalID or numeric ID.
+
+    GET /containers/{id} refuses workbenches with HTTP 422, so BE… IDs go to
+    /workbenches/{id}; a plain numeric ID that turns out to be a workbench is
+    retried there. The client has no single-workbench getter.
+    """
+    bench_id = parse_id(raw_id)
+    flag = "true" if include_content else "false"
+    if resource_type(str(raw_id)) != "bench":
+        try:
+            return inv.get_container_by_id(bench_id, include_content=include_content)
+        except Exception as e:
+            if not str(raw_id).strip().isdigit() or "is a workbench" not in str(e):
+                raise
+    return inv.retrieve_api_results(f"/workbenches/{bench_id}?includeContent={flag}")

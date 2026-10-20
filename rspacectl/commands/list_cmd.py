@@ -44,12 +44,40 @@ def _eln_pagination(page: int, page_size: int, order_by: Optional[str], sort_ord
     return kwargs
 
 
+# The Inventory API only accepts name, globalId, creationDate, modificationDate;
+# map the names the CLI documents (shared with the ELN commands) onto them.
+_INV_ORDER_BY = {"created": "creationDate", "lastmodified": "modificationDate"}
+
+
 def _inv_pagination(
     page: int, page_size: int, order_by: Optional[str], sort_order: str
 ) -> Pagination:
+    if order_by:
+        order_by = _INV_ORDER_BY.get(order_by.lower(), order_by)
     return Pagination(
         page_number=page, page_size=page_size, order_by=order_by, sort_order=sort_order
     )
+
+
+def _inv_search(
+    inv,
+    query: str,
+    pagination: Pagination,
+    result_type: ResultType,
+    deleted: bool,
+    owned_by: Optional[str],
+) -> dict:
+    """GET /search with the --deleted / --owned-by filters.
+
+    The client's ``search`` has no filter arguments, so ``list … -q`` used to
+    ignore --deleted and --owned-by; the endpoint itself supports both.
+    """
+    params = {"query": query, "resultType": result_type.name, **pagination.data}
+    if deleted:
+        params["deletedItems"] = DeletedItemFilter.INCLUDE.name
+    if owned_by:
+        params["ownedBy"] = owned_by
+    return inv.retrieve_api_results("/search", params=params)
 
 
 # ---------------------------------------------------------------------------
@@ -174,9 +202,7 @@ def list_samples(
     try:
         pagination = _inv_pagination(page, page_size, order_by, sort_order)
         if query:
-            result = ctx.inv.search(
-                query=query, pagination=pagination, result_type=ResultType.SAMPLE
-            )
+            result = _inv_search(ctx.inv, query, pagination, ResultType.SAMPLE, deleted, owned_by)
             data = result.get("records", [])
         else:
             deleted_filter = DeletedItemFilter.INCLUDE if deleted else DeletedItemFilter.EXCLUDE
@@ -294,8 +320,8 @@ def list_instruments(
     try:
         pagination = _inv_pagination(page, page_size, order_by, sort_order)
         if query:
-            result = ctx.inv.search(
-                query=query, pagination=pagination, result_type=ResultType.INSTRUMENT
+            result = _inv_search(
+                ctx.inv, query, pagination, ResultType.INSTRUMENT, deleted, owned_by
             )
             data = result.get("records", [])
         else:

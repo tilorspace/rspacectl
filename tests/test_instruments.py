@@ -83,11 +83,14 @@ class TestListInstruments:
         assert "BE5963780" in out
 
     def test_query_uses_instrument_search(self, app_context, mock_inv):
-        mock_inv.search.return_value = {"records": [INSTRUMENT], "totalHits": 1}
+        mock_inv.retrieve_api_results.return_value = {"records": [INSTRUMENT], "totalHits": 1}
         list_cmd.list_instruments(**_list_kwargs(query="microscope"))
 
-        mock_inv.search.assert_called_once()
-        assert mock_inv.search.call_args.kwargs["result_type"] is ResultType.INSTRUMENT
+        path = mock_inv.retrieve_api_results.call_args.args[0]
+        params = mock_inv.retrieve_api_results.call_args.kwargs["params"]
+        assert path == "/search"
+        assert params["query"] == "microscope"
+        assert params["resultType"] == ResultType.INSTRUMENT.name
         mock_inv.list_instruments.assert_not_called()
 
     def test_lists_instrument_templates(self, app_context, mock_inv, capsys):

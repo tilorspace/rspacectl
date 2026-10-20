@@ -270,3 +270,93 @@ class TestGetWorkbench:
         with pytest.raises(typer.Exit):
             get_cmd.get("container", "2", subsamples=False, content=False)
         mock_inv.retrieve_api_results.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Found by the live instrument run (scripts/e2e_instruments.py)
+# ---------------------------------------------------------------------------
+
+
+class TestInventoryOrderBy:
+    @pytest.mark.parametrize(
+        "given, sent",
+        [("created", "creationDate"), ("lastModified", "modificationDate"), ("name", "name")],
+    )
+    def test_cli_names_are_mapped(self, given, sent):
+        from rspacectl.commands.list_cmd import _inv_pagination
+
+        assert _inv_pagination(0, 20, given, "desc").data["orderBy"] == f"{sent} desc"
+
+
+class TestListQueryFilters:
+    def _kwargs(self, **overrides):
+        kwargs = dict(
+            query="x",
+            owned_by=None,
+            deleted=False,
+            page=0,
+            page_size=20,
+            order_by=None,
+            sort_order="asc",
+        )
+        kwargs.update(overrides)
+        return kwargs
+
+    @pytest.mark.parametrize("command", ["list_samples", "list_instruments"])
+    def test_query_passes_deleted_and_owner(self, app_context, mock_inv, command):
+        from rspacectl.commands import list_cmd
+
+        mock_inv.retrieve_api_results.return_value = {"records": [], "totalHits": 0}
+        getattr(list_cmd, command)(**self._kwargs(deleted=True, owned_by="alice"))
+        params = mock_inv.retrieve_api_results.call_args.kwargs["params"]
+        assert params["deletedItems"] == "INCLUDE"
+        assert params["ownedBy"] == "alice"
+
+    def test_query_without_filters_sends_none(self, app_context, mock_inv):
+        from rspacectl.commands import list_cmd
+
+        mock_inv.retrieve_api_results.return_value = {"records": [], "totalHits": 0}
+        list_cmd.list_samples(**self._kwargs())
+        params = mock_inv.retrieve_api_results.call_args.kwargs["params"]
+        assert "deletedItems" not in params and "ownedBy" not in params
+
+
+class TestMoveTargets:
+    def test_subsample_into_list_container(self, app_context, mock_inv):
+        from rspacectl.commands import move
+
+        mock_inv.get_container_by_id.return_value = {"cType": "LIST", "gridLayout": None}
+        move.move(["SS1"], target="IC5", strategy=None, row=None, col=None)
+        mock_inv.add_items_to_list_container.assert_called_once_with(5, "SS1")
+
+    def test_instrument_onto_workbench(self, app_context, mock_inv):
+        from rspacectl.commands import move
+
+        mock_inv.retrieve_api_results.side_effect = lambda path, **kw: (
+            {"id": 2, "globalId": "BE2", "cType": "WORKBENCH"}
+            if path.startswith("/workbenches/")
+            else {"tags": []}
+        )
+        move.move(["IN7"], target="BE2", strategy=None, row=None, col=None)
+        paths = [c.args[0] for c in mock_inv.retrieve_api_results.call_args_list]
+        assert paths[0] == "/workbenches/2?includeContent=true"
+        put = mock_inv.retrieve_api_results.call_args_list[-1]
+        assert put.args[0] == "/instruments/7"
+        assert put.kwargs["params"]["parentContainers"] == [{"id": 2}]
+        mock_inv.get_container_by_id.assert_not_called()
+
+
+class TestDeleteReportsRefusals:
+    def test_sample_refused_with_http_200(self, app_context, mock_inv):
+        mock_inv.doDelete.return_value = {"id": 5, "deleted": False, "canBeDeleted": False}
+        with pytest.raises(typer.Exit):
+            delete.delete_sample(["SA5"])
+        mock_inv.doDelete.assert_called_once_with("samples", 5)
+
+    def test_sample_deleted(self, app_context, mock_inv):
+        mock_inv.doDelete.return_value = {"id": 5, "deleted": True}
+        delete.delete_sample(["SA5"])
+
+    def test_none_response_counts_as_success(self, app_context, mock_inv):
+        mock_inv.delete_instrument.return_value = None
+        delete.delete_instrument(["IN5"])

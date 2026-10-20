@@ -26,9 +26,17 @@ def _batch_delete(ids: List[str], delete_fn, resource_label: str, id_type: str) 
             check_id_type(raw_id, id_type)
         except ValueError as e:
             exit_with_error(f"{e} Nothing was deleted.")
-    successes, failures = batch_run(
-        ids, lambda raw_id: delete_fn(parse_id(raw_id)), f"delete {resource_label}"
-    )
+
+    def _delete(raw_id: str) -> None:
+        result = delete_fn(parse_id(raw_id))
+        # Some refusals come back as HTTP 200 with the unchanged record.
+        if isinstance(result, dict) and result.get("deleted") is False:
+            raise RuntimeError(
+                "the server did not delete it"
+                + (" (canBeDeleted: false)" if result.get("canBeDeleted") is False else "")
+            )
+
+    successes, failures = batch_run(ids, _delete, f"delete {resource_label}")
     console.print(f"[green]Deleted {len(successes)} {resource_label}(s).[/green]")
     if failures:
         err_console.print(f"[yellow]Failed ({len(failures)}):[/yellow] {', '.join(failures)}")
@@ -50,9 +58,15 @@ def delete_document(
 def delete_sample(
     ids: List[str] = typer.Argument(..., help="Sample ID(s) or GlobalID(s)."),
 ) -> None:
-    """Delete one or more inventory samples."""
+    """Delete one or more inventory samples.
+
+    The server refuses to delete a sample while any of its subsamples is
+    stored in a container; move them to your workbench first.
+    """
     ctx = get_context()
-    _batch_delete(ids, ctx.inv.delete_sample, "sample", "sample")
+    # rspace-client's delete_sample drops the response, but a sample whose
+    # subsamples sit in containers comes back as HTTP 200 with deleted: false.
+    _batch_delete(ids, lambda id_: ctx.inv.doDelete("samples", id_), "sample", "sample")
 
 
 @app.command("container")
