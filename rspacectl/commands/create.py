@@ -8,7 +8,7 @@ from typing import List, Optional
 
 import typer
 from rich.markup import escape
-from rspace_client.inv.inv import Quantity, SamplePost
+from rspace_client.inv.inv import InstrumentPost, Quantity, SamplePost
 from rspace_client.inv.inv import Tag as InvTag
 
 from ..context import get_context
@@ -25,7 +25,7 @@ from ..output import (
     print_result,
     print_single,
 )
-from ..utils import load_json_file, parse_tags
+from ..utils import instrument_location, load_json_file, parse_tags
 
 app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 
@@ -120,7 +120,7 @@ def _parse_fields(field_args: List[str]) -> dict:
 
 def _build_fields_post(template_fields: list, field_values: dict) -> list:
     """
-    Build the fields list for create_sample POST.
+    Build the fields list for a sample or instrument POST.
     Matches supplied name→value pairs against the template's field order,
     inserting empty dicts for unprovided fields to preserve positional ordering.
     """
@@ -147,7 +147,7 @@ def _validate_mandatory_fields(template_fields: list, field_values: dict) -> Non
     known = {f.get("name") for f in template_fields}
     unknown = [k for k in field_values if k not in known]
     for u in unknown:
-        warn(f"Unknown field name ignored: '{escape(u)}' (use 'rspace get template' to see valid names)")
+        warn(f"Unknown field name ignored: '{escape(u)}' (use 'rspace get <template-id>' to see valid names)")
 
     missing = [
         f["name"]
@@ -324,6 +324,104 @@ def create_container(
         handle_api_error(e)
 
     console.print(f"[green]Created container[/green] {result.get('globalId')}")
+    print_single(result, ctx.output, columns)
+
+
+# ---------------------------------------------------------------------------
+# instrument
+# ---------------------------------------------------------------------------
+
+
+@app.command("instrument")
+def create_instrument(
+    name: str = typer.Option(..., "--name", "-n", help="Instrument name."),
+    template: Optional[str] = typer.Option(None, "--template", help="Instrument template ID."),
+    field: Optional[List[str]] = typer.Option(
+        None, "--field", help="Template field value as NAME=VALUE. Repeatable."
+    ),
+    tag: Optional[str] = typer.Option(None, "--tag", help="Comma-separated tags."),
+    description: Optional[str] = typer.Option(None, "--description", "-d"),
+    target: Optional[str] = typer.Option(
+        None, "--target", "-t", help="Container to store the instrument in (default: workbench)."
+    ),
+    row: Optional[int] = typer.Option(None, "--row", help="Grid row (1-based), with --target."),
+    col: Optional[int] = typer.Option(None, "--col", help="Grid column (1-based), with --target."),
+) -> None:
+    """Create a new inventory instrument.
+
+    Without --template the server's default instrument template is used.
+    To populate template fields use --field repeatedly:
+
+      rspace create instrument --name "Confocal 1" --template NT12 \\
+        --field "Manufacturer=Zeiss" --target IC34 --row 1 --col 2
+    """
+    ctx = get_context()
+    columns = [
+        COL_GLOBAL_ID,
+        COL_NAME_35,
+        ColumnDef("parentContainers.0.globalId", "Location", 12),
+        COL_CREATED,
+    ]
+
+    if (row is None) != (col is None) or (row is not None and not target):
+        err_console.print("[red]--row and --col must be given together, with --target.[/red]")
+        raise typer.Exit(1)
+
+    field_values = _parse_fields(field or [])
+
+    template_fields = []
+    if template:
+        try:
+            tmpl = ctx.inv.get_instrument_template_by_id(parse_id(template))
+            template_fields = tmpl.get("fields", [])
+        except Exception as e:
+            handle_api_error(e)
+            return  # handle_api_error always exits, but be explicit
+        _validate_mandatory_fields(template_fields, field_values)
+    elif field_values:
+        err_console.print("[red]--field requires --template.[/red]")
+        raise typer.Exit(1)
+
+    post = InstrumentPost(
+        name=name,
+        tags=parse_tags(tag, InvTag),
+        description=description,
+        instrument_template_id=parse_id(template) if template else None,
+        fields=_build_fields_post(template_fields, field_values) if template_fields else None,
+    )
+    if target:
+        post.data.update(instrument_location(parse_id(target), row, col))
+
+    try:
+        # The client's create_instrument has no location parameter; POST directly.
+        result = ctx.inv.retrieve_api_results(
+            "/instruments", request_type="POST", params=post.data
+        )
+    except Exception as e:
+        handle_api_error(e)
+        return  # handle_api_error always exits, but be explicit
+
+    console.print(f"[green]Created instrument[/green] {result.get('globalId')}")
+    print_single(result, ctx.output, columns)
+
+
+@app.command("instrument-template")
+def create_instrument_template(
+    from_file: Path = typer.Option(
+        ..., "--from-file", help="JSON file defining the instrument template."
+    ),
+) -> None:
+    """Create a new inventory instrument template from a JSON definition file."""
+    ctx = get_context()
+    columns = [COL_GLOBAL_ID, COL_NAME_40, COL_CREATED]
+    template_post = load_json_file(from_file)
+
+    try:
+        result = ctx.inv.create_instrument_template(instrument_template_post=template_post)
+    except Exception as e:
+        handle_api_error(e)
+
+    console.print(f"[green]Created instrument template[/green] {result.get('globalId')}")
     print_single(result, ctx.output, columns)
 
 

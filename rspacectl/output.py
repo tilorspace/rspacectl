@@ -45,12 +45,23 @@ class ColumnDef:
 def _get_nested(d: Dict[str, Any], key: str) -> str:
     """Extract a possibly-nested value from a dict using dot notation.
 
+    Numeric path segments index into lists.
+
     Examples:
         _get_nested({"a": {"b": 1}}, "a.b") -> "1"
         _get_nested({"name": "foo"}, "name") -> "foo"
+        _get_nested({"a": [{"b": 1}]}, "a.0.b") -> "1"
     """
     parts = key.split(".", 1)
     val = d.get(parts[0], "")
+    if len(parts) == 2 and isinstance(val, list):
+        head, _, rest = parts[1].partition(".")
+        if not head.isdigit() or int(head) >= len(val):
+            return ""
+        val = val[int(head)]
+        if not rest:
+            return "" if val is None else str(val)
+        parts = [parts[0], rest]
     if len(parts) == 2 and isinstance(val, dict):
         return _get_nested(val, parts[1])
     if val is None:
@@ -177,7 +188,7 @@ def print_page_info(response: Dict[str, Any], count: int) -> None:
     page_size = response.get("pageSize", count)
     start = page * page_size + 1
     end = start + count - 1
-    console.print(
+    err_console.print(
         f"[dim]Showing {start}–{end} of {total}  (page {page}, use --page / --page-size to navigate)[/dim]"
     )
 

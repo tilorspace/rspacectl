@@ -32,7 +32,7 @@ from ...output import err_console
 # Constants
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3  # 3: adds instrument_templates + instruments
 _CHECKPOINT_SUFFIX = ".checkpoint"
 _SNAPSHOT_JSON = "snapshot.json"
 
@@ -114,12 +114,17 @@ class _ImportState:
     completed_phases: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
 
+    reused_templates: List[str] = field(default_factory=list)
+    """New globalIds of existing target templates reused instead of created
+    (identical instrument templates); their icons are left untouched."""
+
     def to_dict(self) -> Dict:
         return {
             "id_map": self.id_map,
             "numeric_map": {str(k): v for k, v in self.numeric_map.items()},
             "completed_phases": self.completed_phases,
             "errors": self.errors,
+            "reused_templates": self.reused_templates,
         }
 
     @classmethod
@@ -129,6 +134,7 @@ class _ImportState:
         s.numeric_map = {int(k): v for k, v in d.get("numeric_map", {}).items()}
         s.completed_phases = d.get("completed_phases", [])
         s.errors = d.get("errors", [])
+        s.reused_templates = d.get("reused_templates", [])
         return s
 
 
@@ -253,8 +259,15 @@ def _preview_image_url(item: Dict) -> Optional[str]:
     """Return the preview-image URL for an item, or None if no image link exists.
 
     Prefers the full-resolution ``rel=image`` link; falls back to ``thumbnail``.
+    Only uploaded images (``/files/image/{hash}``) are previews.  Icon links
+    (``…/instrumentTemplates/{id}/icon/{iconId}``) are placeholders: the
+    server's default icon (-1) or the template's icon, which the template-icon
+    phase migrates. Those count as no image.
     """
-    return _find_link(item, "image") or _find_link(item, "thumbnail")
+    url = _find_link(item, "image") or _find_link(item, "thumbnail")
+    if url and "/icon/" in url.split("?", 1)[0]:
+        return None
+    return url
 
 
 def _preview_image_hash(url: str) -> Optional[str]:
@@ -284,10 +297,13 @@ def _all_items_with_globalid(
     templates: List[Dict],
     containers: List[Dict],
     samples: List[Dict],
+    instrument_templates: Optional[List[Dict]] = None,
+    instruments: Optional[List[Dict]] = None,
 ) -> List[Tuple[str, Dict]]:
-    """Flatten templates + containers + samples (incl. subsamples) into
-    ``(globalId, item)`` pairs.  Used by phases 6/7/8 which iterate over
-    every inventory object that might carry per-item migration metadata.
+    """Flatten templates + containers + samples (incl. subsamples) + instrument
+    templates + instruments into ``(globalId, item)`` pairs.  Used by the file
+    phases, which iterate over every inventory object that might carry
+    per-item migration metadata.
     """
     return (
         [(t["globalId"], t) for t in templates]
@@ -298,4 +314,6 @@ def _all_items_with_globalid(
             for s in samples
             for ss in s.get("subSamples", [])
         ]
+        + [(t["globalId"], t) for t in instrument_templates or []]
+        + [(i["globalId"], i) for i in instruments or []]
     )

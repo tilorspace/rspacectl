@@ -141,3 +141,13 @@ class TestPrintResultTable:
         print_result([], COLUMNS, OutputFormat.TABLE)
         captured = capsys.readouterr()
         assert "No results" in captured.out
+
+
+def test_page_info_goes_to_stderr(capsys):
+    """The pagination footer must not corrupt piped json/csv/quiet output."""
+    from rspacectl.output import print_page_info
+
+    print_page_info({"totalHits": 5, "pageNumber": 0, "pageSize": 2}, 2)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Showing 1–2 of 5" in captured.err

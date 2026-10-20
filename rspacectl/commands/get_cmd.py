@@ -8,6 +8,8 @@ The resource type can be given explicitly or inferred from a GlobalID prefix:
   rspace get SS101          # subsample  (inferred)
   rspace get IC202          # container  (inferred)
   rspace get IT303          # template   (inferred)
+  rspace get IN707          # instrument (inferred)
+  rspace get NT808          # instrument template (inferred)
   rspace get FM404          # form       (inferred)
   rspace get GL505          # file       (inferred)
   rspace get FL606          # folder     (inferred)
@@ -187,6 +189,33 @@ def _print_template_fields(fields: list) -> None:
     console.print(table)
 
 
+def _field_value(f: dict) -> str:
+    """Display value of a filled-in inventory field (template or extra field)."""
+    if f.get("selectedOptions"):
+        return ", ".join(str(o) for o in f["selectedOptions"])
+    if f.get("attachment"):
+        return (f["attachment"] or {}).get("name") or "(attachment)"
+    content = f.get("content")
+    return "" if content is None else str(content)
+
+
+def _print_item_fields(fields: list, extra_fields: list) -> None:
+    """Print a table of field values, as stored on an item (not a template)."""
+    rows = [(f, "") for f in fields or []] + [(f, "extra") for f in extra_fields or []]
+    if not rows:
+        return
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("Field Name", min_width=20)
+    table.add_column("Type", min_width=10)
+    table.add_column("Value", min_width=20)
+    table.add_column("", min_width=5)
+    for f, kind in rows:
+        table.add_row(f.get("name", ""), f.get("type", ""), _field_value(f), kind)
+
+    console.print("\n[bold]Fields:[/bold]")
+    console.print(table)
+
+
 def _get_template(id: str) -> None:
     ctx = get_context()
     columns = [
@@ -199,6 +228,49 @@ def _get_template(id: str) -> None:
     ]
     try:
         result = ctx.inv.get_sample_template_by_id(parse_id(id))
+    except Exception as e:
+        handle_api_error(e)
+        return  # handle_api_error always exits, but be explicit
+    print_single(result, ctx.output, columns)
+    if ctx.output == OutputFormat.TABLE:
+        _print_template_fields(result.get("fields", []))
+
+
+def _get_instrument(id: str) -> None:
+    ctx = get_context()
+    columns = [
+        COL_GLOBAL_ID,
+        COL_NAME_35,
+        ColumnDef("description", "Description", 40),
+        ColumnDef("templateId", "Template", 10),
+        ColumnDef("parentContainers.0.globalId", "Location", 12),
+        ColumnDef("tags", "Tags", 30),
+        COL_CREATED,
+        COL_OWNER,
+    ]
+    try:
+        result = ctx.inv.get_instrument_by_id(parse_id(id))
+    except Exception as e:
+        handle_api_error(e)
+        return  # handle_api_error always exits, but be explicit
+    print_single(result, ctx.output, columns)
+    if ctx.output == OutputFormat.TABLE:
+        _print_item_fields(result.get("fields", []), result.get("extraFields", []))
+
+
+def _get_instrument_template(id: str) -> None:
+    ctx = get_context()
+    columns = [
+        COL_GLOBAL_ID,
+        COL_NAME_35,
+        ColumnDef("description", "Description", 40),
+        ColumnDef("version", "Version", 8),
+        COL_CREATED,
+        COL_MODIFIED,
+        COL_OWNER,
+    ]
+    try:
+        result = ctx.inv.get_instrument_template_by_id(parse_id(id))
     except Exception as e:
         handle_api_error(e)
         return  # handle_api_error always exits, but be explicit
@@ -264,6 +336,8 @@ _DISPATCH = {
     "bench": _get_container,
     "form": _get_form,
     "template": _get_template,
+    "instrument": _get_instrument,
+    "instrument-template": _get_instrument_template,
     "file": _get_file,
 }
 
@@ -280,6 +354,10 @@ _TYPE_ALIASES = {
     "cont": "container",
     "tmpl": "template",
     "templ": "template",
+    "inst": "instrument",
+    "instr": "instrument",
+    "itmpl": "instrument-template",
+    "instrument_template": "instrument-template",
 }
 
 
@@ -319,6 +397,8 @@ def get(
       rspace get SS202        subsample
       rspace get IC303        container
       rspace get IT404        sample template
+      rspace get IN707        instrument
+      rspace get NT808        instrument template
       rspace get FM505        form
       rspace get GL606        gallery file
 

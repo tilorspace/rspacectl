@@ -18,6 +18,8 @@ _INV_ENDPOINTS: dict = {
     "subsample": "subSamples",
     "container": "containers",
     "template": "sampleTemplates",
+    "instrument": "instruments",
+    "instrument-template": "instrumentTemplates",
 }
 
 
@@ -25,7 +27,7 @@ def tag(
     id: str = typer.Argument(..., help="GlobalID or numeric ID (e.g. SD123, SA456)."),
     tags: str = typer.Argument(..., help="Comma-separated tags to set, replacing existing tags."),
 ) -> None:
-    """Set tags on a document, notebook, sample, subsample, container, or template.
+    """Set tags on a document, notebook, sample, subsample, container, instrument, or template.
 
     Replaces all existing tags on the resource. Pass a GlobalID so the resource
     type is inferred automatically:
@@ -34,6 +36,7 @@ def tag(
       rspace tag NB456 "methods,protocols"
       rspace tag SA789 "reagent,validated"
       rspace tag IC101 "freezer,-80C"
+      rspace tag IN202 "microscopy,shared"
     """
     ctx = get_context()
     rtype = resource_type(id)
@@ -60,7 +63,8 @@ def tag(
             typer.echo(
                 f"Cannot tag resource type '{rtype}' (ID: {id}). "
                 "Use a GlobalID: SD (document), NB (notebook), SA (sample), "
-                "SS (subsample), IC (container), IT (template).",
+                "SS (subsample), IC (container), IT (template), IN (instrument), "
+                "NT (instrument template).",
                 err=True,
             )
             raise typer.Exit(1)

@@ -164,17 +164,23 @@ def _export_preview_image(
 
 
 def _export_template_icon(inv, tmpl: Dict, icons_dir: Path) -> Optional[str]:
-    """Download a template's icon (iconId). Returns local filename or None."""
+    """Download a sample or instrument template's icon (iconId). Returns local filename or None."""
     icon_id = tmpl.get("iconId")
     tmpl_id = tmpl.get("id")
-    if not icon_id or not tmpl_id:
+    # iconId -1 is the server's "no custom icon" marker
+    if not icon_id or icon_id < 0 or not tmpl_id:
         return None
     gid = tmpl.get("globalId", f"IT{tmpl_id}")
     local_name = f"{gid}_icon"
     dest = icons_dir / local_name
     icons_dir.mkdir(parents=True, exist_ok=True)
+    get_icon = (
+        inv.get_instrument_template_icon
+        if gid.startswith("NT")
+        else inv.get_sample_template_icon
+    )
     try:
-        inv.get_sample_template_icon(tmpl_id, icon_id, str(dest))
+        get_icon(tmpl_id, icon_id, str(dest))
         return local_name
     except Exception as exc:
         _export_warn(f"Could not download icon for template {gid}: {exc}")
@@ -250,6 +256,19 @@ def _export_templates(inv, ids: Optional[List[int]] = None) -> List[Dict]:
     return templates
 
 
+def _export_instrument_templates(inv, ids: Optional[List[int]] = None) -> List[Dict]:
+    """Fetch full instrument template details for all (or selected) templates."""
+    if ids:
+        templates = []
+        for tid in ids:
+            err_console.print(f"  Fetching instrument template {tid}…")
+            templates.append(inv.get_instrument_template_by_id(tid))
+        return templates
+    err_console.print("  Listing all instrument templates (paginated)…")
+    stubs = _paginate(inv.list_instrument_templates, "templates")
+    return [inv.get_instrument_template_by_id(stub["id"]) for stub in stubs]
+
+
 def _walk_container(
     inv,
     stub: Dict,
@@ -258,6 +277,7 @@ def _walk_container(
     parent_grid_col: Optional[int] = None,
     parent_grid_row: Optional[int] = None,
     found_sample_ids: Optional[Set[int]] = None,
+    found_instrument_ids: Optional[Set[int]] = None,
 ) -> List[Dict]:
     """Recursively fetch a container and all its child containers.
 
@@ -270,7 +290,8 @@ def _walk_container(
 
     If ``found_sample_ids`` is a set, parent sample IDs of any subsamples
     encountered in the location contents will be added to it so the caller
-    can auto-include those samples in the export.
+    can auto-include those samples in the export. ``found_instrument_ids``
+    works the same way for instruments stored in the walked containers.
     """
     container_id = stub.get("id") or parse_id(stub.get("globalId", ""))
     full = inv.get_container_by_id(container_id, include_content=True)
@@ -310,6 +331,11 @@ def _walk_container(
             parent_sample_id = sample_ref.get("id")
             if parent_sample_id:
                 found_sample_ids.add(parent_sample_id)
+        elif (
+            item.get("type") == "INSTRUMENT" or gid.startswith("IN")
+        ) and found_instrument_ids is not None:
+            instrument_id = item.get("id") or parse_id(gid)
+            found_instrument_ids.add(instrument_id)
 
     if not children_with_pos:
         # storedContainers / content.content are legacy fallback fields from older
@@ -337,6 +363,7 @@ def _walk_container(
                 parent_grid_col=col if is_grid else None,
                 parent_grid_row=row if is_grid else None,
                 found_sample_ids=found_sample_ids,
+                found_instrument_ids=found_instrument_ids,
             )
         )
 
@@ -345,13 +372,14 @@ def _walk_container(
 
 def _export_containers(
     inv, ids: Optional[List[int]] = None, warn_attachments: bool = False
-) -> Tuple[List[Dict], Set[int]]:
+) -> Tuple[List[Dict], Set[int], Set[int]]:
     """Walk the container tree from all (or selected) roots.
 
-    Returns ``(containers, found_sample_ids)`` where ``found_sample_ids`` is
-    the set of numeric sample IDs whose subsamples were found inside the walked
-    containers.  When ``ids`` is ``None`` (export-all) samples are handled
-    separately, so the set will be empty.
+    Returns ``(containers, found_sample_ids, found_instrument_ids)``.
+    ``found_sample_ids`` is the set of numeric sample IDs whose subsamples were
+    found inside the walked containers; ``found_instrument_ids`` the numeric IDs
+    of instruments stored in them.  When ``ids`` is ``None`` (export-all)
+    samples and instruments are handled separately, so both sets are empty.
     """
     if ids:
         roots = [inv.get_container_by_id(cid) for cid in ids]
@@ -361,6 +389,7 @@ def _export_containers(
 
     containers: List[Dict] = []
     found_sample_ids: Set[int] = set()
+    found_instrument_ids: Set[int] = set()
     container_attachment_count = 0
     # Only auto-collect sample IDs when exporting specific containers
     collect_samples = ids is not None
@@ -370,6 +399,7 @@ def _export_containers(
             _walk_container(
                 inv, root, depth=0, parent_global_id=None,
                 found_sample_ids=found_sample_ids if collect_samples else None,
+                found_instrument_ids=found_instrument_ids if collect_samples else None,
             )
         )
 
@@ -390,7 +420,29 @@ def _export_containers(
             "attachments are not included (--no-files was set). Re-attach files manually after import."
         )
 
-    return containers, found_sample_ids
+    return containers, found_sample_ids, found_instrument_ids
+
+
+def _item_location(item: Dict) -> Optional[Dict]:
+    """Where a placeable item (subsample or instrument) sits: container + position.
+
+    Coords are kept only for GRID and IMAGE parents; for LIST parents they are
+    sequential slot IDs with no meaningful position.  Returns None when the
+    item has no parent container.
+    """
+    parents = item.get("parentContainers") or []
+    if not parents:
+        return None
+    parent = parents[0]  # an item lives in exactly one container at a time
+    ctype = parent.get("cType")
+    parent_loc = item.get("parentLocation") or {}
+    record_coords = ctype in ("GRID", "IMAGE")
+    return {
+        "container_global_id": parent.get("globalId"),
+        "parent_ctype": ctype,
+        "grid_col": parent_loc.get("coordX") if record_coords else None,
+        "grid_row": parent_loc.get("coordY") if record_coords else None,
+    }
 
 
 def _collect_subsample_locations(sample: Dict) -> List[Dict]:
@@ -408,24 +460,9 @@ def _collect_subsample_locations(sample: Dict) -> List[Dict]:
     """
     locations = []
     for ss in sample.get("subSamples", []):
-        parents = ss.get("parentContainers") or []
-        if not parents:
-            continue
-        parent = parents[0]  # a subsample lives in exactly one container at a time
-        ctype = parent.get("cType")
-        parent_loc = ss.get("parentLocation") or {}
-        # Coords are meaningful for GRID and IMAGE; they pin to a grid cell or
-        # to a marker location respectively.  For LIST they're slot IDs.
-        record_coords = ctype in ("GRID", "IMAGE")
-        locations.append(
-            {
-                "subsample_global_id": ss["globalId"],
-                "container_global_id": parent.get("globalId"),
-                "parent_ctype": ctype,
-                "grid_col": parent_loc.get("coordX") if record_coords else None,
-                "grid_row": parent_loc.get("coordY") if record_coords else None,
-            }
-        )
+        loc = _item_location(ss)
+        if loc is not None:
+            locations.append({"subsample_global_id": ss["globalId"], **loc})
     return locations
 
 
@@ -494,13 +531,52 @@ def _export_samples(
     return samples, ref_template_gids
 
 
+def _export_instruments(
+    inv,
+    ids: Optional[List[int]] = None,
+    warn_attachments: bool = False,
+) -> Tuple[List[Dict], Set[str]]:
+    """Fetch full instrument details and record each instrument's placement.
+
+    Returns ``(instruments, referenced_instrument_template_global_ids)``.
+    The placement is stored as ``_migration.location`` (same shape as a
+    subsample location, without ``subsample_global_id``).
+    """
+    if ids:
+        stubs = [{"id": iid} for iid in ids]
+    else:
+        err_console.print("  Listing all instruments (paginated)…")
+        stubs = _paginate(inv.list_instruments, "instruments")
+
+    instruments: List[Dict] = []
+    ref_template_gids: Set[str] = set()
+    attachment_count = 0
+    for stub in stubs:
+        full = inv.get_instrument_by_id(stub["id"])
+        if full.get("templateId"):
+            ref_template_gids.add(f"NT{full['templateId']}")
+        full["_migration"] = {"location": _item_location(full)}
+        if bool(full.get("attachments")) or any(
+            ef.get("type") in _ATTACHMENT_FIELD_TYPES for ef in (full.get("extraFields") or [])
+        ):
+            attachment_count += 1
+        instruments.append(full)
+
+    if warn_attachments and attachment_count:
+        warn(
+            f"{attachment_count} instrument(s) have file attachments — "
+            "attachments are not included (--no-files was set). Re-attach files manually after import."
+        )
+    return instruments, ref_template_gids
+
+
 # ---------------------------------------------------------------------------
 # Export — files phase (runs after data export, modifies _migration in-place)
 # ---------------------------------------------------------------------------
 
 
 def _enrich_image_marker_indices(
-    containers: List[Dict], samples: List[Dict]
+    containers: List[Dict], samples: List[Dict], instruments: Optional[List[Dict]] = None
 ) -> None:
     """Annotate IMAGE-parent subsample placements with marker_index.
 
@@ -515,6 +591,8 @@ def _enrich_image_marker_indices(
     adding a ``marker_index`` field where applicable.  Subsamples whose
     coords don't match any source marker get ``marker_index=None``; the
     importer will fall back to coord lookup for those.
+
+    Instruments' ``_migration.location`` entries are annotated the same way.
     """
     container_markers: Dict[str, List[Tuple[Any, Any]]] = {}
     for c in containers:
@@ -524,18 +602,26 @@ def _enrich_image_marker_indices(
                 for loc in c.get("locations") or []
             ]
 
-    for sample in samples:
-        for loc in (sample.get("_migration") or {}).get("subsample_locations", []) or []:
-            if loc.get("parent_ctype") != "IMAGE":
-                continue
-            markers = container_markers.get(loc.get("container_global_id"))
-            if not markers:
-                continue
-            target = (loc.get("grid_col"), loc.get("grid_row"))
-            try:
-                loc["marker_index"] = markers.index(target)
-            except ValueError:
-                loc["marker_index"] = None
+    placements = [
+        loc
+        for sample in samples
+        for loc in (sample.get("_migration") or {}).get("subsample_locations", []) or []
+    ] + [
+        (inst.get("_migration") or {}).get("location")
+        for inst in instruments or []
+        if (inst.get("_migration") or {}).get("location")
+    ]
+    for loc in placements:
+        if loc.get("parent_ctype") != "IMAGE":
+            continue
+        markers = container_markers.get(loc.get("container_global_id"))
+        if not markers:
+            continue
+        target = (loc.get("grid_col"), loc.get("grid_row"))
+        try:
+            loc["marker_index"] = markers.index(target)
+        except ValueError:
+            loc["marker_index"] = None
 
 
 def _export_files(
@@ -544,6 +630,8 @@ def _export_files(
     containers: List[Dict],
     samples: List[Dict],
     snapshot_dir: Path,
+    instrument_templates: Optional[List[Dict]] = None,
+    instruments: Optional[List[Dict]] = None,
 ) -> None:
     """Download all attachments, preview images, icons, and IMAGE container backgrounds.
 
@@ -562,11 +650,15 @@ def _export_files(
     # preview uploaded. Hashes referenced by ≥2 items are almost certainly
     # defaults; skip them to avoid round-tripping the same placeholder image
     # for every sample/subsample/container in the snapshot.
+    instrument_templates = instrument_templates or []
+    instruments = instruments or []
     all_items = (
         list(templates)
         + list(containers)
         + list(samples)
         + [ss for s in samples for ss in s.get("subSamples", [])]
+        + list(instrument_templates)
+        + list(instruments)
     )
     hash_counts: Dict[str, int] = {}
     for it in all_items:
@@ -583,13 +675,16 @@ def _export_files(
     # Total = templates + containers + samples + every subsample.  Used to
     # drive the progress bar so users see how far through file downloads we are.
     n_subsamples = sum(len(s.get("subSamples", [])) for s in samples)
-    total_items = len(templates) + len(containers) + len(samples) + n_subsamples
+    total_items = (
+        len(templates) + len(containers) + len(samples) + n_subsamples
+        + len(instrument_templates) + len(instruments)
+    )
 
     with _progress() as prog:
         task = prog.add_task("[cyan]Downloading files", total=total_items)
 
-        # --- Templates: attachments + preview image + icon ---
-        for tmpl in templates:
+        # --- Sample + instrument templates: attachments + preview image + icon ---
+        for tmpl in list(templates) + list(instrument_templates):
             gid = tmpl.get("globalId", "")
             mig = tmpl.setdefault("_migration", {})
 
@@ -660,6 +755,22 @@ def _export_files(
                     ss_mig["preview_local"] = preview_local
                 prog.advance(task)
 
+        # --- Instruments: attachments + preview image ---
+        for inst in instruments:
+            gid = inst.get("globalId", "")
+            mig = inst.setdefault("_migration", {})
+
+            att_meta = _export_attachments(inv, inst, att_dir / gid)
+            ef_meta = _export_attachment_extra_fields(inv, inst, att_dir / gid)
+            if att_meta or ef_meta:
+                mig["attachments"] = att_meta
+                mig["attachment_extra_fields"] = ef_meta
+
+            preview_local = _export_preview_image(inv, inst, img_dir, skip_hashes)
+            if preview_local:
+                mig["preview_local"] = preview_local
+            prog.advance(task)
+
 
 # ---------------------------------------------------------------------------
 # Command function (decorated in __init__.py)
@@ -687,6 +798,18 @@ def migrate_export(
         help="Sample GlobalID(s) to export (referenced templates auto-included).",
         metavar="GLOBAL_ID",
     ),
+    instrument_template_ids: Optional[List[str]] = typer.Option(
+        None,
+        "--instrument-template",
+        help="Instrument template GlobalID(s) to export (repeat flag for multiple).",
+        metavar="GLOBAL_ID",
+    ),
+    instrument_ids: Optional[List[str]] = typer.Option(
+        None,
+        "--instrument",
+        help="Instrument GlobalID(s) to export (referenced instrument templates auto-included).",
+        metavar="GLOBAL_ID",
+    ),
     no_files: bool = typer.Option(
         False,
         "--no-files",
@@ -707,12 +830,16 @@ def migrate_export(
 
       rspace migrate export --container IC789 --output freezer_a/
 
+      rspace migrate export --instrument IN12 --instrument-template NT3 --output lab_kit/
+
       rspace migrate export --all --output data_only/ --no-files
     """
-    if not any([all_resources, template_ids, container_ids, sample_ids]):
+    if not any(
+        [all_resources, template_ids, container_ids, sample_ids, instrument_template_ids, instrument_ids]
+    ):
         err_console.print(
-            "[red]Specify --all, or at least one of "
-            "--template / --container / --sample.[/red]"
+            "[red]Specify --all, or at least one of --template / --container / --sample / "
+            "--instrument-template / --instrument.[/red]"
         )
         raise typer.Exit(1)
 
@@ -738,10 +865,14 @@ def migrate_export(
         "templates": [],
         "containers": [],
         "samples": [],
+        "instrument_templates": [],
+        "instruments": [],
     }
 
     # ---- Templates -------------------------------------------------------
-    if all_resources or template_ids or sample_ids:
+    # Only explicitly selected templates here; templates referenced by the
+    # exported samples are auto-included below.
+    if all_resources or template_ids:
         t_ids = (
             [parse_id(t) for t in template_ids]
             if template_ids and not all_resources
@@ -757,6 +888,7 @@ def migrate_export(
 
     # ---- Containers ------------------------------------------------------
     container_found_sample_ids: Set[int] = set()
+    container_found_instrument_ids: Set[int] = set()
     if all_resources or container_ids:
         c_ids = (
             [parse_id(c) for c in container_ids]
@@ -765,7 +897,11 @@ def migrate_export(
         )
         err_console.print("[bold]Exporting containers…[/bold]")
         try:
-            blob["containers"], container_found_sample_ids = _export_containers(inv, ids=c_ids, warn_attachments=no_files)
+            (
+                blob["containers"],
+                container_found_sample_ids,
+                container_found_instrument_ids,
+            ) = _export_containers(inv, ids=c_ids, warn_attachments=no_files)
         except Exception as exc:
             err_console.print(f"[red]Export failed (containers): {exc}[/red]")
             raise typer.Exit(1)
@@ -774,6 +910,11 @@ def migrate_export(
             err_console.print(
                 f"  Found [green]{len(container_found_sample_ids)}[/green] sample(s)"
                 " referenced by subsamples inside the walked containers."
+            )
+        if container_found_instrument_ids:
+            err_console.print(
+                f"  Found [green]{len(container_found_instrument_ids)}[/green] instrument(s)"
+                " stored inside the walked containers."
             )
 
     # ---- Samples ---------------------------------------------------------
@@ -816,11 +957,56 @@ def migrate_export(
             raise typer.Exit(1)
         console.print(f"  Collected [green]{len(blob['samples'])}[/green] sample(s).")
 
+    # ---- Instrument templates --------------------------------------------
+    # Same rule as sample templates: explicit selection here, referenced ones below.
+    if all_resources or instrument_template_ids:
+        nt_ids = (
+            [parse_id(t) for t in instrument_template_ids]
+            if instrument_template_ids and not all_resources
+            else None
+        )
+        err_console.print("[bold]Exporting instrument templates…[/bold]")
+        try:
+            blob["instrument_templates"] = _export_instrument_templates(inv, ids=nt_ids)
+        except Exception as exc:
+            err_console.print(f"[red]Export failed (instrument templates): {exc}[/red]")
+            raise typer.Exit(1)
+        console.print(
+            f"  Collected [green]{len(blob['instrument_templates'])}[/green] instrument template(s)."
+        )
+
+    # ---- Instruments -----------------------------------------------------
+    explicit_instruments = {parse_id(i) for i in (instrument_ids or [])}
+    wanted_instruments = explicit_instruments | container_found_instrument_ids
+    if all_resources or wanted_instruments:
+        in_ids = None if all_resources else sorted(wanted_instruments)
+        err_console.print("[bold]Exporting instruments…[/bold]")
+        try:
+            instruments, ref_nt_gids = _export_instruments(
+                inv, ids=in_ids, warn_attachments=no_files
+            )
+            blob["instruments"] = instruments
+
+            if not all_resources and ref_nt_gids:
+                existing_gids = {t["globalId"] for t in blob["instrument_templates"]}
+                missing_gids = ref_nt_gids - existing_gids
+                if missing_gids:
+                    err_console.print(
+                        f"  Auto-including {len(missing_gids)} referenced instrument template(s)…"
+                    )
+                    blob["instrument_templates"].extend(
+                        _export_instrument_templates(inv, ids=[parse_id(g) for g in missing_gids])
+                    )
+        except Exception as exc:
+            err_console.print(f"[red]Export failed (instruments): {exc}[/red]")
+            raise typer.Exit(1)
+        console.print(f"  Collected [green]{len(blob['instruments'])}[/green] instrument(s).")
+
     # ---- Cross-reference IMAGE marker indices ----------------------------
     # Must run after both containers and samples are exported, since it
     # joins subsample placements against the source IMAGE containers' marker
     # arrays.  Robust to any coord transformation the API applies on import.
-    _enrich_image_marker_indices(blob["containers"], blob["samples"])
+    _enrich_image_marker_indices(blob["containers"], blob["samples"], blob["instruments"])
 
     # ---- Files (attachments, images, icons) ------------------------------
     if not no_files:
@@ -831,6 +1017,8 @@ def migrate_export(
                 blob["containers"],
                 blob["samples"],
                 snapshot_dir,
+                instrument_templates=blob["instrument_templates"],
+                instruments=blob["instruments"],
             )
         except Exception as exc:
             err_console.print(f"[red]File export error: {exc}[/red]")
@@ -844,7 +1032,11 @@ def migrate_export(
     all_items = [
         item
         for _, item in _all_items_with_globalid(
-            blob["templates"], blob["containers"], blob["samples"]
+            blob["templates"],
+            blob["containers"],
+            blob["samples"],
+            blob["instrument_templates"],
+            blob["instruments"],
         )
     ]
     n_attachments = sum(
@@ -855,7 +1047,9 @@ def migrate_export(
         1 for item in all_items if (item.get("_migration") or {}).get("preview_local")
     )
     n_icons = sum(
-        1 for t in blob["templates"] if (t.get("_migration") or {}).get("icon_local")
+        1
+        for t in blob["templates"] + blob["instrument_templates"]
+        if (t.get("_migration") or {}).get("icon_local")
     )
     n_ic_backgrounds = sum(
         1 for c in blob["containers"]
@@ -866,7 +1060,9 @@ def migrate_export(
     console.print(
         f"  Templates: [green]{len(blob['templates'])}[/green]  "
         f"Containers: [green]{len(blob['containers'])}[/green]  "
-        f"Samples: [green]{len(blob['samples'])}[/green]"
+        f"Samples: [green]{len(blob['samples'])}[/green]  "
+        f"Instrument templates: [green]{len(blob['instrument_templates'])}[/green]  "
+        f"Instruments: [green]{len(blob['instruments'])}[/green]"
     )
     if not no_files:
         parts = []

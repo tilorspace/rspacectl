@@ -50,7 +50,25 @@ def delete_container(
     ctx = get_context()
     # The Python SDK does not expose a dedicated delete_container method;
     # use the raw endpoint via the client's built-in doDelete helper.
-    _batch_delete(ids, lambda id_: ctx.inv.doDelete("/containers", id_), "container")
+    _batch_delete(ids, lambda id_: ctx.inv.doDelete("containers", id_), "container")
+
+
+@app.command("instrument")
+def delete_instrument(
+    ids: List[str] = typer.Argument(..., help="Instrument ID(s) or GlobalID(s)."),
+) -> None:
+    """Delete one or more inventory instruments."""
+    ctx = get_context()
+    _batch_delete(ids, ctx.inv.delete_instrument, "instrument")
+
+
+@app.command("instrument-template")
+def delete_instrument_template(
+    ids: List[str] = typer.Argument(..., help="Instrument template ID(s) or GlobalID(s)."),
+) -> None:
+    """Delete one or more inventory instrument templates."""
+    ctx = get_context()
+    _batch_delete(ids, ctx.inv.delete_instrument_template, "instrument template")
 
 
 @app.command("form")
