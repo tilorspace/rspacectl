@@ -6,8 +6,8 @@ import typer
 from rspace_client.inv.inv import Tag as InvTag
 
 from ..context import get_context
-from ..exceptions import handle_api_error
-from ..ids import parse_id
+from ..exceptions import exit_with_error, handle_api_error
+from ..ids import parse_typed_id
 from ..output import (
     COL_GLOBAL_ID,
     COL_MODIFIED,
@@ -21,6 +21,14 @@ from ..output import (
 from ..utils import parse_tags, put_inventory_item
 
 app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
+
+
+def _typed_id(id: str, expected: str) -> int:
+    """Numeric ID of ``id``, exiting cleanly if its GlobalID prefix is not ``expected``."""
+    try:
+        return parse_typed_id(id, expected)
+    except ValueError as e:
+        exit_with_error(f"{e} Nothing was updated.")
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +69,7 @@ def update_document(
     """
     ctx = get_context()
     columns = [COL_GLOBAL_ID, COL_NAME_40, ColumnDef("tags", "Tags", 30), COL_MODIFIED]
-    doc_id = parse_id(id)
+    doc_id = _typed_id(id, "document")
     try:
         if append:
             result = ctx.eln.append_content(doc_id, append, field_index=field_index)
@@ -90,6 +98,7 @@ def update_document(
 
 def _update_inv_item(
     endpoint: str,
+    item_type: str,
     id: str,
     name: Optional[str],
     description: Optional[str],
@@ -98,10 +107,13 @@ def _update_inv_item(
 ) -> Optional[dict]:
     """PUT name/description/tags/extra fields to /<endpoint>/<id> in one request.
 
+    ``id`` must be numeric or a GlobalID of ``item_type``.
+
     Existing tags are preserved unless --tag is given (see put_inventory_item).
     Returns the API response, or None when nothing was sent.
     """
     ctx = get_context()
+    item_id = _typed_id(id, item_type)
     body: dict = dict(extra_body or {})
     if name:
         body["name"] = name
@@ -112,7 +124,7 @@ def _update_inv_item(
     if not body:
         return None
     try:
-        return put_inventory_item(ctx.inv, endpoint, parse_id(id), body)
+        return put_inventory_item(ctx.inv, endpoint, item_id, body)
     except Exception as e:
         handle_api_error(e)
 
@@ -139,7 +151,7 @@ def update_sample(
         )
         raise typer.Exit(1)
 
-    result = _update_inv_item("samples", id, name, description, tag)
+    result = _update_inv_item("samples", "sample", id, name, description, tag)
 
     console.print(f"[green]Updated sample[/green] {result.get('globalId')}")
     print_single(result, ctx.output, columns)
@@ -211,23 +223,27 @@ def update_instrument(
         )
         raise typer.Exit(1)
 
+    inst_id = _typed_id(id, "instrument")
     result = None
     if latest_template:
         try:
-            result = ctx.inv.update_instrument_to_latest_template_version(parse_id(id))
+            result = ctx.inv.update_instrument_to_latest_template_version(inst_id)
         except Exception as e:
             handle_api_error(e)
 
     extra_body = None
     if field:
         try:
-            current = ctx.inv.get_instrument_by_id(parse_id(id))
+            current = ctx.inv.get_instrument_by_id(inst_id)
         except Exception as e:
             handle_api_error(e)
             return  # handle_api_error always exits, but be explicit
         extra_body = {"fields": _field_updates(current.get("fields") or [], field)}
 
-    result = _update_inv_item("instruments", id, name, description, tag, extra_body) or result
+    result = (
+        _update_inv_item("instruments", "instrument", id, name, description, tag, extra_body)
+        or result
+    )
 
     console.print(f"[green]Updated instrument[/green] {result.get('globalId')}")
     print_single(result, ctx.output, columns)
@@ -247,8 +263,9 @@ def update_instrument_template(
     if not propagate:
         typer.echo("Nothing to update. Use --propagate.", err=True)
         raise typer.Exit(1)
+    template_id = _typed_id(id, "instrument-template")
     try:
-        result = ctx.inv.update_instrument_template_instruments(parse_id(id))
+        result = ctx.inv.update_instrument_template_instruments(template_id)
     except Exception as e:
         handle_api_error(e)
         return  # handle_api_error always exits, but be explicit

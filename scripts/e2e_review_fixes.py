@@ -5,7 +5,8 @@ server state after each step, not just exit codes:
 
 - C6  ``create sample --expiry`` sends a date; ``--quantity/--unit`` work
 - C5  ``split`` validates the ID, works with numeric IDs and keeps tags
-- C4  ``get <type> <id>`` / ``delete <type> <ids>`` refuse mismatched prefixes
+- C4  ``get <type> <id>`` / ``update <type> <id>`` / ``delete <type> <ids>`` refuse
+      mismatched prefixes
 - ``delete document`` and ``get`` of workbenches (BE…) work
 
 Every item it creates is named ``rspacectl-review-e2e-*`` and deleted at the
@@ -252,6 +253,44 @@ try:
         )
     rc, data, _, _ = run("get", sa)
     check("single-arg get still infers type", data and data["globalId"] == sa)
+
+    # ------------------------------------------------------------------ C4 update
+    e.section("C4: update <type> <id>")
+    names = {gid: get(gid)["name"] for gid in (sa, ss, ic, inst["globalId"], doc, fl)}
+    refused = [
+        ("sample", ss, "--name"),
+        ("sample", ic, "--name"),
+        ("instrument", sa, "--name"),
+        ("instrument", sa, "--latest-template"),
+        ("document", fl, "--name"),
+        ("document", sa, "--name"),
+    ]
+    for typ, gid, flag in refused:
+        args = [flag, P + "renamed"] if flag == "--name" else [flag]
+        rc, _, _, err = run("update", typ, gid, *args, fmt="table")
+        unchanged = all(get(g)["name"] == n for g, n in names.items())
+        check(
+            f"update {typ} {gid} {flag} refused, nothing renamed",
+            rc == 1 and "Nothing was updated" in err and unchanged,
+            f"rc={rc} {err}",
+        )
+    if it:
+        rc, _, _, err = run("update", "instrument-template", it, "--propagate", fmt="table")
+        check(f"update instrument-template {it} refused", rc == 1 and "ID" in err, err)
+    for typ, gid in [("sample", sa), ("instrument", inst["globalId"]), ("document", doc)]:
+        new_name = names[gid] + "-upd"
+        rc, data, _, err = run("update", typ, gid, "--name", new_name)
+        check(
+            f"update {typ} {gid} --name renames {gid}",
+            rc == 0 and get(gid)["name"] == new_name,
+            f"rc={rc} {err}",
+        )
+    rc, _, _, err = run("update", "sample", sa[2:], "--description", "numeric ok")
+    check(
+        "update sample <numeric> still works",
+        rc == 0 and get(sa)["description"] == "numeric ok",
+        err,
+    )
 
     # ------------------------------------------------------------------ C4 delete
     e.section("C4: delete <type> <ids>")

@@ -1,6 +1,6 @@
 """Tests for fixes from the RSpace 2.27 API / rspace-client review.
 
-C4: explicit type + mismatching GlobalID prefix (get, delete)
+C4: explicit type + mismatching GlobalID prefix (get, delete, update)
 C5: split passes a GlobalID and restores tags cleared by the bulk UPDATE
 C6: create sample --expiry sends a date, not a datetime
 """
@@ -11,7 +11,7 @@ import pytest
 import typer
 from rspace_client.inv.inv import BulkOperationResult, ByLocation, SamplePost
 
-from rspacectl.commands import create, delete, get_cmd, list_cmd, move, split
+from rspacectl.commands import create, delete, get_cmd, list_cmd, move, split, update
 from rspacectl.commands.list_cmd import _inv_pagination
 from rspacectl.ids import check_id_type
 
@@ -103,6 +103,73 @@ class TestDeleteTypeMismatch:
         with pytest.raises(typer.Exit):
             delete.delete_document(["FM5"])
         mock_eln.doDelete.assert_not_called()
+
+
+def _update_doc(id, **kw):
+    args = dict(name="x", tag=None, content=None, append=None, prepend=None, field_id=None)
+    update.update_document(id, **{**args, "field_index": 0, **kw})
+
+
+def _update_instrument(id, **kw):
+    args = dict(name=None, description=None, tag=None, field=None, latest_template=False)
+    update.update_instrument(id, **{**args, **kw})
+
+
+class TestUpdateTypeMismatch:
+    def test_sample_rejects_subsample(self, app_context, mock_inv):
+        with pytest.raises(typer.Exit):
+            update.update_sample("SS5", name="x", description=None, tag=None)
+        mock_inv.retrieve_api_results.assert_not_called()
+
+    @pytest.mark.parametrize("id", ["SA5", "5"])
+    def test_sample_matching_or_numeric(self, app_context, mock_inv, id):
+        mock_inv.retrieve_api_results.return_value = {"globalId": "SA5", "tags": []}
+        update.update_sample(id, name="x", description=None, tag="t")
+        put = mock_inv.retrieve_api_results.call_args
+        assert put.args[0] == "/samples/5"
+        assert put.kwargs["request_type"] == "PUT"
+
+    @pytest.mark.parametrize(
+        "kw", [{"name": "x"}, {"latest_template": True}, {"field": ["Serial=1"]}]
+    )
+    def test_instrument_rejects_sample(self, app_context, mock_inv, kw):
+        with pytest.raises(typer.Exit):
+            _update_instrument("SA5", **kw)
+        assert mock_inv.method_calls == []
+
+    @pytest.mark.parametrize("id", ["IN5", "5"])
+    def test_instrument_matching_or_numeric(self, app_context, mock_inv, id):
+        mock_inv.update_instrument_to_latest_template_version.return_value = {"globalId": "IN5"}
+        _update_instrument(id, latest_template=True)
+        mock_inv.update_instrument_to_latest_template_version.assert_called_once_with(5)
+
+    def test_instrument_template_rejects_template(self, app_context, mock_inv):
+        with pytest.raises(typer.Exit):
+            update.update_instrument_template("IT5", propagate=True)
+        mock_inv.update_instrument_template_instruments.assert_not_called()
+
+    @pytest.mark.parametrize("id", ["NT5", "5"])
+    def test_instrument_template_matching_or_numeric(self, app_context, mock_inv, id):
+        mock_inv.update_instrument_template_instruments.return_value = {"results": []}
+        update.update_instrument_template(id, propagate=True)
+        mock_inv.update_instrument_template_instruments.assert_called_once_with(5)
+
+    @pytest.mark.parametrize("id", ["SA5", "FL5", "NB5"])
+    def test_document_rejects_other_types(self, app_context, mock_eln, id):
+        with pytest.raises(typer.Exit):
+            _update_doc(id)
+        assert mock_eln.method_calls == []
+
+    @pytest.mark.parametrize("id", ["SD5", "5"])
+    def test_document_matching_or_numeric(self, app_context, mock_eln, id):
+        mock_eln.update_document.return_value = {"globalId": "SD5"}
+        _update_doc(id)
+        assert mock_eln.update_document.call_args.kwargs["document_id"] == 5
+
+    def test_document_append_rejects_sample(self, app_context, mock_eln):
+        with pytest.raises(typer.Exit):
+            _update_doc("SA5", name=None, append="<p>x</p>")
+        mock_eln.append_content.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
