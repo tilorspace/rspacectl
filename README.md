@@ -472,6 +472,10 @@ poetry install -E keychain
 # Run tests
 poetry run pytest
 
+# Live end-to-end checks against a local RSpace (localhost only; creates and
+# deletes rspacectl-review-e2e-* items)
+poetry run python scripts/e2e_review_fixes.py [--profile NAME]
+
 # Format and lint
 poetry run black rspacectl tests
 poetry run ruff check rspacectl tests
