@@ -62,3 +62,38 @@ def resource_type(global_id: str) -> str:
     if m:
         return GLOBAL_ID_PREFIXES.get(m.group(1).upper(), "unknown")
     return "unknown"
+
+
+# Resource types that share an endpoint, so their prefixes are interchangeable
+# when a command is given an explicit type.
+_COMPATIBLE_TYPES = {
+    "container": {"container", "bench"},
+    "bench": {"container", "bench"},
+    "folder": {"folder", "notebook"},
+    "notebook": {"folder", "notebook"},
+}
+
+
+def check_id_type(value: Union[str, int], expected: str) -> None:
+    """Raise ValueError if a GlobalID's prefix does not belong to ``expected``.
+
+    Numeric IDs carry no type and always pass. Without this check a command
+    given an explicit type silently drops the prefix, so e.g.
+    ``rspace get subsample SA905`` would fetch SS905.
+    """
+    m = _GLOBAL_ID_RE.match(str(value).strip())
+    if not m:
+        return
+    actual = GLOBAL_ID_PREFIXES.get(m.group(1).upper(), "unknown")
+    prefix = m.group(1).upper()
+    if actual == "unknown":
+        raise ValueError(f"'{value}' has an unknown GlobalID prefix '{prefix}'.")
+    if actual not in _COMPATIBLE_TYPES.get(expected, {expected}):
+
+        def article(word: str) -> str:
+            return "an" if word[0] in "aeiou" else "a"
+
+        raise ValueError(
+            f"'{value}' is {article(actual)} {actual} ID, not {article(expected)} {expected} ID "
+            f"(prefix '{prefix}')."
+        )
