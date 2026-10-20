@@ -114,12 +114,17 @@ class _ImportState:
     completed_phases: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
 
+    reused_templates: List[str] = field(default_factory=list)
+    """New globalIds of existing target templates reused instead of created
+    (identical instrument templates); their icons are left untouched."""
+
     def to_dict(self) -> Dict:
         return {
             "id_map": self.id_map,
             "numeric_map": {str(k): v for k, v in self.numeric_map.items()},
             "completed_phases": self.completed_phases,
             "errors": self.errors,
+            "reused_templates": self.reused_templates,
         }
 
     @classmethod
@@ -129,6 +134,7 @@ class _ImportState:
         s.numeric_map = {int(k): v for k, v in d.get("numeric_map", {}).items()}
         s.completed_phases = d.get("completed_phases", [])
         s.errors = d.get("errors", [])
+        s.reused_templates = d.get("reused_templates", [])
         return s
 
 
@@ -253,11 +259,13 @@ def _preview_image_url(item: Dict) -> Optional[str]:
     """Return the preview-image URL for an item, or None if no image link exists.
 
     Prefers the full-resolution ``rel=image`` link; falls back to ``thumbnail``.
-    Links to the server's default icon (``…/icon/-1``, used by instruments and
-    instrument templates without a custom image) count as no image.
+    Only uploaded images (``/files/image/{hash}``) are previews.  Icon links
+    (``…/instrumentTemplates/{id}/icon/{iconId}``) are placeholders: the
+    server's default icon (-1) or the template's icon, which the template-icon
+    phase migrates. Those count as no image.
     """
     url = _find_link(item, "image") or _find_link(item, "thumbnail")
-    if url and url.split("?", 1)[0].rstrip("/").endswith("/icon/-1"):
+    if url and "/icon/" in url.split("?", 1)[0]:
         return None
     return url
 

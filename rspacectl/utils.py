@@ -87,6 +87,23 @@ def put_inventory_item(inv, endpoint: str, item_id: int, body: dict) -> dict:
     return inv.retrieve_api_results(f"/{endpoint}/{item_id}", request_type="PUT", params=body)
 
 
+def set_item_image(inv, global_id: str, file) -> dict:
+    """Tag-preserving replacement for the client's ``set_image``.
+
+    ``set_image`` PUTs only ``newBase64Image``, which clears the item's tags
+    (see put_inventory_item). Works for any inventory GlobalID (SA, SS, IC,
+    IT, IN, NT).
+    """
+    import base64
+
+    from rspace_client.inv.inv import Id
+
+    item = Id(global_id)
+    image_b64 = base64.b64encode(file.read()).decode("ascii")
+    body = {"newBase64Image": "data:image/png;base64," + image_b64}
+    return put_inventory_item(inv, item.get_api_endpoint(), item.as_id(), body)
+
+
 # ---------------------------------------------------------------------------
 # Instrument placement
 # ---------------------------------------------------------------------------
@@ -97,21 +114,38 @@ def put_inventory_item(inv, endpoint: str, item_id: int, body: dict) -> dict:
 
 
 def instrument_location(
-    container_id: int, row: Optional[int] = None, col: Optional[int] = None
+    container_id: int,
+    row: Optional[int] = None,
+    col: Optional[int] = None,
+    location_id: Optional[int] = None,
 ) -> dict:
-    """Request body fragment that places an instrument in a container (or grid cell)."""
+    """Request body fragment that places an instrument in a container.
+
+    Pass ``row``/``col`` for a GRID cell, or ``location_id`` for an IMAGE
+    container marker; neither for a LIST container.
+    """
     body: dict = {"parentContainers": [{"id": container_id}]}
-    if row is not None and col is not None:
+    if location_id is not None:
+        body["parentLocation"] = {"id": location_id}
+    elif row is not None and col is not None:
         body["parentLocation"] = {"coordX": col, "coordY": row}
     return body
 
 
 def place_instrument(
-    inv, instrument_id: int, container_id: int, row: Optional[int] = None, col: Optional[int] = None
+    inv,
+    instrument_id: int,
+    container_id: int,
+    row: Optional[int] = None,
+    col: Optional[int] = None,
+    location_id: Optional[int] = None,
 ) -> dict:
-    """Move an instrument into a container (optionally a specific grid cell)."""
+    """Move an instrument into a container (grid cell, image marker, or list)."""
     return put_inventory_item(
-        inv, "instruments", instrument_id, instrument_location(container_id, row, col)
+        inv,
+        "instruments",
+        instrument_id,
+        instrument_location(container_id, row, col, location_id),
     )
 
 

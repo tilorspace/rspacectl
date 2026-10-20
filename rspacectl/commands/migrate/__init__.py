@@ -36,18 +36,26 @@ Snapshot folder layout
         IC678_background.png  — IMAGE container background image
         IC678_locations.json  — [{coordX, coordY}] marker positions
 
-Import algorithm (eight phases)
---------------------------------
-1. Templates          — create flat; record old→new globalId + per-field id mapping
-2. Containers (flat)  — create all containers at top level; record old→new globalId.
-                        IMAGE containers are recreated with their background image
-                        and marker locations when those are present in the snapshot.
-3. Container hierarchy— move containers into their parents, shallowest depth first
-4. Samples            — create from mapped template; restore field values + subsample metadata
-5. Subsample placements — move each subsample into its recorded container
-6. Attachments        — re-upload files to their new owner globalIds
-7. Preview images     — set_image for templates, samples, subsamples, containers
-8. Template icons     — set_sample_template_icon for templates
+Import algorithm (phases, in order)
+-----------------------------------
+ 1. Templates            — create flat; record old→new globalId + per-field id mapping
+ 2. Instrument templates — reuse an identical template already on the target
+                           (name, description, ordered field definitions), else
+                           create; record id + field mappings (--no-reuse-templates)
+ 3. Containers (flat)    — create all containers at top level; record old→new globalId.
+                           IMAGE containers are recreated with their background image
+                           and marker locations when those are present in the snapshot.
+ 4. Container hierarchy  — move containers into their parents, shallowest depth first
+ 5. Samples              — create from mapped template; restore field values + subsample metadata
+ 6. Instruments          — create from mapped template with field values, tags, extra
+                           fields and barcodes (identifiers such as PIDINST DOIs are not migrated)
+ 7. Subsample placements — move each subsample into its recorded container
+ 8. Instrument placements— PUT each instrument into its recorded container / cell / marker
+ 9. Attachments          — re-upload files to their new owner globalIds
+10. Preview images       — set_image for templates, samples, subsamples, containers, instruments
+11. Template icons       — sample + instrument template icons (not for reused templates)
+
+Items on a source workbench (BE…) stay on the importing user's workbench.
 
 A checkpoint file is written after each phase so an interrupted import can
 resume with --checkpoint without duplicating already-created resources.
@@ -124,12 +132,20 @@ from ._import import (  # noqa: F401
     _import_attachments,
     _import_container_hierarchy,
     _import_containers_flat,
+    _import_instrument_placements,
+    _import_instrument_templates,
+    _import_instruments,
+    _instrument_field_values,
+    _instrument_payload,
+    _instrument_template_payload,
     _import_preview_images,
     _import_samples,
     _import_subsample_placements,
     _import_template_icons,
     _import_templates,
+    _resolve_placement,
     _restore_subsample,
+    _template_fingerprint,
     migrate_import,
 )
 

@@ -1,8 +1,9 @@
 """Import side of the migrate command.
 
 Reads a snapshot directory produced by ``_export.py`` and recreates
-templates, containers, samples, subsample placements, attachments, preview
-images, and template icons on the target server in eight ordered phases.
+templates, instrument templates, containers, samples, instruments, item
+placements, attachments, preview images, and template icons on the target
+server in ordered phases.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from ...context import get_context
 from ...exceptions import warn
 from ...ids import parse_id
 from ...output import console, err_console
+from ...utils import place_instrument, set_item_image
 from ._common import (
     SCHEMA_VERSION,
     _ImportState,
@@ -42,7 +44,7 @@ from ._common import (
 
 def _import_templates(inv, templates: List[Dict], state: _ImportState, dry_run: bool) -> None:
     """Phase 1 — create templates and record id + field mappings."""
-    err_console.print(f"\n[bold]Phase 1[/bold] — importing {len(templates)} template(s)…")
+    err_console.print(f"\n[bold]Templates[/bold] — importing {len(templates)} template(s)…")
     for tmpl in templates:
         old_gid = tmpl["globalId"]
         old_fields = tmpl.get("fields", [])
@@ -92,7 +94,7 @@ def _import_containers_flat(
     in the snapshot; otherwise they fall back to LIST with a warning.
     """
     err_console.print(
-        f"\n[bold]Phase 2[/bold] — creating {len(containers)} container(s) (flat)…"
+        f"\n[bold]Containers[/bold] — creating {len(containers)} container(s) (flat)…"
     )
     ic_dir = _image_containers_dir(snapshot_dir)
 
@@ -204,12 +206,12 @@ def _import_container_hierarchy(
         if c.get("_migration", {}).get("parent_global_id") and c["globalId"] in state.id_map
     ]
     if not needs_move:
-        err_console.print("\n[bold]Phase 3[/bold] — no container nesting to restore.")
+        err_console.print("\n[bold]Container hierarchy[/bold] — no container nesting to restore.")
         return
 
     needs_move.sort(key=lambda c: c["_migration"]["depth"])
     err_console.print(
-        f"\n[bold]Phase 3[/bold] — restoring hierarchy for {len(needs_move)} container(s)…"
+        f"\n[bold]Container hierarchy[/bold] — restoring hierarchy for {len(needs_move)} container(s)…"
     )
 
     for c in needs_move:
@@ -414,7 +416,7 @@ def _import_samples(
     templates: Optional[List[Dict]] = None,
 ) -> None:
     """Phase 4 — create samples from templates; restore field values and subsample metadata."""
-    err_console.print(f"\n[bold]Phase 4[/bold] — importing {len(samples)} sample(s)…")
+    err_console.print(f"\n[bold]Samples[/bold] — importing {len(samples)} sample(s)…")
 
     # Build name→old_field_globalId maps per template so we can pre-populate mandatory
     # fields at creation time (avoids API rejections for empty mandatory fields).
@@ -574,6 +576,66 @@ def _image_marker_lookup(
     return ordered, by_coords
 
 
+def _resolve_placement(
+    inv,
+    loc: Dict,
+    state: _ImportState,
+    image_lookups: Dict[str, Tuple[List[int], Dict[Tuple[int, int], int]]],
+    label: str,
+) -> Optional[Dict[str, Any]]:
+    """Resolve a recorded placement against the new server.
+
+    ``loc`` is a subsample location or an instrument ``_migration.location``.
+    Returns ``{new_c_gid, new_c_id, kind, row, col, location_id}`` where kind is
+    ``IMAGE``, ``GRID`` or ``LIST``, or ``None`` after recording an error.
+    Workbench parents are handled by the caller.
+    """
+    old_c_gid = loc["container_global_id"]
+    parent_ctype = loc.get("parent_ctype")  # may be missing on legacy snapshots
+    new_c_gid = state.id_map.get(old_c_gid)
+    if not new_c_gid:
+        _record_error(state, f"{label}: container {old_c_gid} not in id_map — skipped")
+        return None
+
+    row = loc.get("grid_row")
+    col = loc.get("grid_col")
+    resolved: Dict[str, Any] = {
+        "new_c_gid": new_c_gid,
+        "new_c_id": parse_id(new_c_gid),
+        "row": row,
+        "col": col,
+        "location_id": None,
+    }
+    if parent_ctype == "IMAGE":
+        if new_c_gid not in image_lookups:
+            image_lookups[new_c_gid] = _image_marker_lookup(inv, new_c_gid)
+        ordered, by_coords = image_lookups[new_c_gid]
+
+        # Prefer marker_index (robust to API coord transformations).
+        # Fall back to coord lookup for legacy snapshots without it.
+        marker_index = loc.get("marker_index")
+        new_loc_id: Optional[int] = None
+        if isinstance(marker_index, int) and 0 <= marker_index < len(ordered):
+            new_loc_id = ordered[marker_index]
+        elif col is not None and row is not None:
+            new_loc_id = by_coords.get((col, row))
+
+        if new_loc_id is None:
+            _record_error(
+                state,
+                f"{label}: "
+                f"could not resolve marker on new IMAGE container "
+                f"(marker_index={marker_index}, coords=({col},{row})) — skipped",
+            )
+            return None
+        resolved.update(kind="IMAGE", location_id=new_loc_id)
+    elif parent_ctype == "GRID" or (col is not None and row is not None):
+        resolved["kind"] = "GRID"
+    else:
+        resolved["kind"] = "LIST"
+    return resolved
+
+
 def _import_subsample_placements(
     inv, samples: List[Dict], state: _ImportState, dry_run: bool
 ) -> None:
@@ -596,11 +658,11 @@ def _import_subsample_placements(
     ]
 
     if not placements:
-        err_console.print("\n[bold]Phase 5[/bold] — no subsample placements to restore.")
+        err_console.print("\n[bold]Subsample placements[/bold] — no subsample placements to restore.")
         return
 
     err_console.print(
-        f"\n[bold]Phase 5[/bold] — placing {len(placements)} subsample(s) into containers…"
+        f"\n[bold]Subsample placements[/bold] — placing {len(placements)} subsample(s) into containers…"
     )
 
     workbench_skipped: List[str] = []
@@ -611,7 +673,6 @@ def _import_subsample_placements(
     for loc in placements:
         old_ss_gid = loc["subsample_global_id"]
         old_c_gid = loc["container_global_id"]
-        parent_ctype = loc.get("parent_ctype")  # may be missing on legacy snapshots
 
         # Workbench containers (BE-prefix) are per-user and can't be migrated —
         # collect them for a single summary warning rather than per-item errors.
@@ -638,44 +699,27 @@ def _import_subsample_placements(
             continue
 
         try:
+            target = _resolve_placement(
+                inv, loc, state, image_lookups, f"Subsample placement {old_ss_gid} → {old_c_gid}"
+            )
+            if target is None:
+                continue
             # Items being moved require the globalId string (SS prefix) so that
             # the SDK's Id.is_movable() check passes; target container accepts numeric.
-            new_c_id = parse_id(new_c_gid)
-            row = loc.get("grid_row")
-            col = loc.get("grid_col")
-
-            if parent_ctype == "IMAGE":
-                if new_c_gid not in image_lookups:
-                    image_lookups[new_c_gid] = _image_marker_lookup(inv, new_c_gid)
-                ordered, by_coords = image_lookups[new_c_gid]
-
-                # Prefer marker_index (robust to API coord transformations).
-                # Fall back to coord lookup for legacy snapshots without it.
-                marker_index = loc.get("marker_index")
-                new_loc_id: Optional[int] = None
-                if isinstance(marker_index, int) and 0 <= marker_index < len(ordered):
-                    new_loc_id = ordered[marker_index]
-                elif col is not None and row is not None:
-                    new_loc_id = by_coords.get((col, row))
-
-                if new_loc_id is None:
-                    _record_error(
-                        state,
-                        f"Subsample placement {old_ss_gid} → {old_c_gid}: "
-                        f"could not resolve marker on new IMAGE container "
-                        f"(marker_index={marker_index}, coords=({col},{row})) — skipped",
-                    )
-                    continue
+            new_c_id = target["new_c_id"]
+            if target["kind"] == "IMAGE":
                 inv.add_items_to_image_container(
                     target_container_id=new_c_id,
                     items_to_move=[new_ss_gid],
-                    location_ids=[new_loc_id],
+                    location_ids=[target["location_id"]],
                 )
-            elif parent_ctype == "GRID" or (col is not None and row is not None):
+            elif target["kind"] == "GRID":
                 from rspace_client.inv.inv import ByLocation, GridLocation
 
                 # ByLocation(locations, *items_to_move) — locations list is first arg
-                placement = ByLocation([GridLocation(x=col, y=row)], new_ss_gid)
+                placement = ByLocation(
+                    [GridLocation(x=target["col"], y=target["row"])], new_ss_gid
+                )
                 inv.add_items_to_grid_container(
                     target_container_id=new_c_id,
                     grid_placement=placement,
@@ -698,6 +742,310 @@ def _import_subsample_placements(
 
 
 # ---------------------------------------------------------------------------
+# Instrument templates (reuse identical ones), instruments, placements
+# ---------------------------------------------------------------------------
+
+
+def _template_fingerprint(tmpl: Dict) -> str:
+    """Canonical identity of a template: name, description, ordered field definitions.
+
+    Server-generated values (ids, dates, owner, version, icon) and tags are
+    ignored, so the same template on two servers yields the same fingerprint.
+    """
+    fields = [
+        {
+            "name": f.get("name"),
+            "type": (f.get("type") or "").lower(),
+            "mandatory": bool(f.get("mandatory")),
+            "definition": f.get("definition") or None,
+            "default": f.get("content") or None,
+            "selectedOptions": f.get("selectedOptions") or None,
+        }
+        for f in sorted(tmpl.get("fields") or [], key=lambda f: f.get("columnIndex") or 0)
+    ]
+    return json.dumps(
+        {"name": tmpl.get("name"), "description": tmpl.get("description") or "", "fields": fields},
+        sort_keys=True,
+    )
+
+
+def _instrument_template_payload(tmpl: Dict) -> Dict:
+    """POST body for /instrumentTemplates built from an exported template."""
+    payload: Dict[str, Any] = {"name": tmpl["name"], "fields": []}
+    if tmpl.get("description"):
+        payload["description"] = tmpl["description"]
+    if tmpl.get("tags"):
+        payload["tags"] = tmpl["tags"]
+    for f in sorted(tmpl.get("fields") or [], key=lambda f: f.get("columnIndex") or 0):
+        field_def: Dict[str, Any] = {"name": f["name"], "type": f["type"]}
+        if f.get("mandatory"):
+            field_def["mandatory"] = True
+        if f.get("definition"):
+            field_def["definition"] = f["definition"]
+        if f.get("content"):
+            field_def["content"] = f["content"]
+        if f.get("selectedOptions"):
+            field_def["selectedOptions"] = f["selectedOptions"]
+        payload["fields"].append(field_def)
+    return payload
+
+
+def _map_template_fields(old_tmpl: Dict, new_tmpl: Dict, state: _ImportState) -> None:
+    """Map old field globalIds → new field numeric ids by position (as Phase 1 does)."""
+    order = lambda fs: sorted(fs or [], key=lambda f: f.get("columnIndex") or 0)  # noqa: E731
+    for old_f, new_f in zip(order(old_tmpl.get("fields")), order(new_tmpl.get("fields"))):
+        if old_f.get("globalId") and new_f.get("id"):
+            state.id_map[old_f["globalId"]] = str(new_f["id"])
+
+
+def _target_instrument_templates(inv) -> Dict[str, List[Dict]]:
+    """Fingerprint → full templates for every instrument template visible on the target."""
+    from ._common import _paginate
+
+    by_fp: Dict[str, List[Dict]] = {}
+    for stub in _paginate(inv.list_instrument_templates, "templates"):
+        full = inv.get_instrument_template_by_id(stub["id"])
+        by_fp.setdefault(_template_fingerprint(full), []).append(full)
+    return by_fp
+
+
+def _import_instrument_templates(
+    inv,
+    templates: List[Dict],
+    state: _ImportState,
+    dry_run: bool,
+    reuse: bool = True,
+) -> None:
+    """Create instrument templates, or reuse an identical one already on the target."""
+    err_console.print(
+        f"\n[bold]Instrument templates[/bold] — importing {len(templates)} template(s)…"
+    )
+    if not templates:
+        return
+
+    existing: Dict[str, List[Dict]] = {}
+    names_on_target: Set[str] = set()
+    if reuse:
+        try:
+            existing = _target_instrument_templates(inv)
+            names_on_target = {t.get("name") for ts in existing.values() for t in ts}
+        except Exception as exc:
+            warn(f"Could not list instrument templates on target ({exc}) — creating all.")
+
+    for tmpl in templates:
+        old_gid = tmpl["globalId"]
+        matches = sorted(existing.get(_template_fingerprint(tmpl), []), key=lambda t: t["id"])
+
+        if matches:
+            new_tmpl = matches[0]
+            new_gid = new_tmpl["globalId"]
+            note = f" ({len(matches)} identical on target; using lowest id)" if len(matches) > 1 else ""
+            if dry_run:
+                console.print(
+                    f"  [dim]DRY RUN[/dim]  would reuse instrument template {new_gid} "
+                    f"for {old_gid} ({tmpl['name']!r}){note}"
+                )
+            else:
+                console.print(
+                    f"  [green]↺[/green]  [cyan]{old_gid}[/cyan] → [cyan]{new_gid}[/cyan]"
+                    f"  ({tmpl['name']}, reused: identical){note}"
+                )
+            state.id_map[old_gid] = new_gid
+            state.numeric_map[tmpl["id"]] = new_tmpl["id"]
+            if new_gid not in state.reused_templates:
+                state.reused_templates.append(new_gid)
+            _map_template_fields(tmpl, new_tmpl, state)
+            continue
+
+        if reuse and tmpl.get("name") in names_on_target:
+            warn(
+                f"Instrument template {old_gid} ({tmpl['name']!r}): a template with this name "
+                "exists on the target but differs — creating a new one."
+            )
+
+        if dry_run:
+            console.print(
+                f"  [dim]DRY RUN[/dim]  would create instrument template: {tmpl['name']!r}"
+            )
+            state.id_map[old_gid] = old_gid
+            state.numeric_map[tmpl["id"]] = tmpl["id"]
+            for old_f in tmpl.get("fields") or []:
+                if old_f.get("globalId"):
+                    state.id_map[old_f["globalId"]] = str(old_f["id"])
+            continue
+
+        try:
+            new_tmpl = inv.create_instrument_template(
+                instrument_template_post=_instrument_template_payload(tmpl)
+            )
+            state.id_map[old_gid] = new_tmpl["globalId"]
+            state.numeric_map[tmpl["id"]] = new_tmpl["id"]
+            _map_template_fields(tmpl, new_tmpl, state)
+            console.print(
+                f"  [green]✓[/green]  [cyan]{old_gid}[/cyan] → [cyan]{new_tmpl['globalId']}[/cyan]"
+                f"  ({tmpl['name']})"
+            )
+        except Exception as exc:
+            _record_error(state, f"Instrument template {old_gid} ({tmpl.get('name')!r}): {exc}")
+
+
+def _instrument_field_values(old_fields: List[Dict], new_tmpl_fields: List[Dict]) -> List[Dict]:
+    """Positional ``fields`` list for POST /instruments, matched to the new template by name."""
+    old_by_name = {f.get("name"): f for f in old_fields or []}
+    values: List[Dict] = []
+    for new_f in sorted(new_tmpl_fields or [], key=lambda f: f.get("columnIndex") or 0):
+        old_f = old_by_name.get(new_f.get("name"))
+        if not old_f:
+            values.append({})
+        elif old_f.get("selectedOptions"):
+            values.append({"selectedOptions": old_f["selectedOptions"]})
+        elif old_f.get("content") not in (None, ""):
+            values.append({"content": old_f["content"]})
+        else:
+            values.append({})
+    return values
+
+
+def _instrument_payload(inst: Dict, new_tmpl: Optional[Dict]) -> Dict:
+    """POST body for /instruments built from an exported instrument."""
+    payload: Dict[str, Any] = {"name": inst["name"]}
+    if inst.get("description"):
+        payload["description"] = inst["description"]
+    if inst.get("tags"):
+        payload["tags"] = inst["tags"]
+    if new_tmpl:
+        payload["templateId"] = new_tmpl["id"]
+        payload["fields"] = _instrument_field_values(inst.get("fields"), new_tmpl.get("fields"))
+    extra = [
+        {k: ef[k] for k in ("name", "type", "content") if k in ef}
+        for ef in inst.get("extraFields") or []
+        if not ef.get("deleted")
+    ]
+    if extra:
+        payload["extraFields"] = extra
+    barcodes = [
+        {k: b[k] for k in ("data", "format", "description") if b.get(k) is not None}
+        for b in inst.get("barcodes") or []
+    ]
+    if barcodes:
+        payload["barcodes"] = barcodes
+    return payload
+
+
+def _import_instruments(
+    inv, instruments: List[Dict], state: _ImportState, dry_run: bool
+) -> None:
+    """Create instruments from their (mapped) templates with field values, tags and extras."""
+    err_console.print(f"\n[bold]Instruments[/bold] — importing {len(instruments)} instrument(s)…")
+    tmpl_cache: Dict[str, Dict] = {}
+    with_identifiers = 0
+
+    for inst in instruments:
+        old_gid = inst["globalId"]
+        if inst.get("identifiers"):
+            with_identifiers += 1
+
+        new_tmpl = None
+        if inst.get("templateId"):
+            old_tmpl_gid = f"NT{inst['templateId']}"
+            new_tmpl_gid = state.id_map.get(old_tmpl_gid)
+            if not new_tmpl_gid:
+                warn(
+                    f"Instrument {old_gid}: template {old_tmpl_gid} not in id_map — "
+                    "created with the default template."
+                )
+            elif not dry_run:
+                if new_tmpl_gid not in tmpl_cache:
+                    tmpl_cache[new_tmpl_gid] = inv.get_instrument_template_by_id(
+                        parse_id(new_tmpl_gid)
+                    )
+                new_tmpl = tmpl_cache[new_tmpl_gid]
+
+        if dry_run:
+            console.print(f"  [dim]DRY RUN[/dim]  would create instrument: {inst['name']!r}")
+            state.id_map[old_gid] = old_gid
+            state.numeric_map[inst["id"]] = inst["id"]
+            continue
+
+        try:
+            new_inst = inv.retrieve_api_results(
+                "/instruments", request_type="POST", params=_instrument_payload(inst, new_tmpl)
+            )
+            state.id_map[old_gid] = new_inst["globalId"]
+            state.numeric_map[inst["id"]] = new_inst["id"]
+            console.print(
+                f"  [green]✓[/green]  [cyan]{old_gid}[/cyan] → [cyan]{new_inst['globalId']}[/cyan]"
+                f"  ({inst['name']})"
+            )
+        except Exception as exc:
+            _record_error(state, f"Instrument {old_gid} ({inst.get('name')!r}): {exc}")
+
+    if with_identifiers:
+        warn(
+            f"{with_identifiers} instrument(s) carry identifiers (e.g. PIDINST DOIs) — "
+            "identifiers are not migrated; re-link or re-register them on the target."
+        )
+
+
+def _import_instrument_placements(
+    inv, instruments: List[Dict], state: _ImportState, dry_run: bool
+) -> None:
+    """Move instruments into their recorded containers (PUT /instruments/{id})."""
+    placements = [
+        (inst["globalId"], (inst.get("_migration") or {}).get("location"))
+        for inst in instruments
+        if (inst.get("_migration") or {}).get("location")
+    ]
+    workbench_skipped = [g for g, loc in placements if (loc.get("container_global_id") or "").startswith("BE")]
+    placements = [(g, loc) for g, loc in placements if g not in workbench_skipped]
+
+    if not placements:
+        err_console.print("\n[bold]Instrument placements[/bold] — none to restore.")
+    else:
+        err_console.print(
+            f"\n[bold]Instrument placements[/bold] — placing {len(placements)} instrument(s)…"
+        )
+    image_lookups: Dict[str, Tuple[List[int], Dict[Tuple[int, int], int]]] = {}
+
+    for old_gid, loc in placements:
+        old_c_gid = loc["container_global_id"]
+        label = f"Instrument placement {old_gid} → {old_c_gid}"
+        new_gid = state.id_map.get(old_gid)
+        if not new_gid:
+            _record_error(state, f"{label}: instrument not in id_map — skipped")
+            continue
+        if dry_run:
+            new_c_gid = state.id_map.get(old_c_gid, old_c_gid)
+            console.print(
+                f"  [dim]DRY RUN[/dim]  would place [cyan]{new_gid}[/cyan] → [cyan]{new_c_gid}[/cyan]"
+            )
+            continue
+        try:
+            target = _resolve_placement(inv, loc, state, image_lookups, label)
+            if target is None:
+                continue
+            place_instrument(
+                inv,
+                parse_id(new_gid),
+                target["new_c_id"],
+                row=target["row"] if target["kind"] == "GRID" else None,
+                col=target["col"] if target["kind"] == "GRID" else None,
+                location_id=target["location_id"],
+            )
+            console.print(
+                f"  [green]✓[/green]  [cyan]{new_gid}[/cyan] → [cyan]{target['new_c_gid']}[/cyan]"
+            )
+        except Exception as exc:
+            _record_error(state, f"{label}: {exc}")
+
+    if workbench_skipped:
+        warn(
+            f"{len(workbench_skipped)} instrument(s) were on a workbench on the source server — "
+            "they stay on your workbench on the target."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Phases 6, 7, 8 — file uploads
 # ---------------------------------------------------------------------------
 
@@ -710,24 +1058,28 @@ def _import_attachments(
     state: _ImportState,
     dry_run: bool,
     snapshot_dir: Path,
+    instrument_templates: Optional[List[Dict]] = None,
+    instruments: Optional[List[Dict]] = None,
 ) -> None:
     """Phase 6 — re-upload attachments to their new owner globalIds."""
     att_dir = _attachments_dir(snapshot_dir)
     if not att_dir.exists():
-        err_console.print("\n[bold]Phase 6[/bold] — no attachments directory; skipping.")
+        err_console.print("\n[bold]Attachments[/bold] — no attachments directory; skipping.")
         return
 
-    all_items = _all_items_with_globalid(templates, containers, samples)
+    all_items = _all_items_with_globalid(
+        templates, containers, samples, instrument_templates, instruments
+    )
 
     total = sum(
         len((item.get("_migration") or {}).get("attachments") or [])
         for _, item in all_items
     )
     if total == 0:
-        err_console.print("\n[bold]Phase 6[/bold] — no attachments to restore.")
+        err_console.print("\n[bold]Attachments[/bold] — no attachments to restore.")
         return
 
-    err_console.print(f"\n[bold]Phase 6[/bold] — restoring {total} attachment(s)…")
+    err_console.print(f"\n[bold]Attachments[/bold] — restoring {total} attachment(s)…")
 
     with _progress() as prog:
         task = prog.add_task("[cyan]Uploading attachments", total=total)
@@ -760,7 +1112,9 @@ def _import_attachments(
                     continue
                 try:
                     with open(src, "rb") as fh:
-                        inv.upload_attachment(new_gid, fh)
+                        # (name, file) tuple: keep the original filename rather than
+                        # the snapshot's "<globalId>_<name>" local filename
+                        inv.upload_attachment(new_gid, (filename, fh))
                 except Exception as exc:
                     _record_error(state, f"Attachment {filename!r} for {old_gid}: {exc}")
                 prog.advance(task)
@@ -774,23 +1128,27 @@ def _import_preview_images(
     state: _ImportState,
     dry_run: bool,
     snapshot_dir: Path,
+    instrument_templates: Optional[List[Dict]] = None,
+    instruments: Optional[List[Dict]] = None,
 ) -> None:
-    """Phase 7 — set preview images for templates, samples, subsamples, and containers."""
+    """Phase 7 — set preview images for templates, samples, subsamples, containers, and instruments."""
     img_dir = _images_dir(snapshot_dir)
     if not img_dir.exists():
-        err_console.print("\n[bold]Phase 7[/bold] — no images directory; skipping.")
+        err_console.print("\n[bold]Preview images[/bold] — no images directory; skipping.")
         return
 
-    all_items = _all_items_with_globalid(templates, containers, samples)
+    all_items = _all_items_with_globalid(
+        templates, containers, samples, instrument_templates, instruments
+    )
 
     total = sum(
         1 for _, item in all_items if (item.get("_migration") or {}).get("preview_local")
     )
     if total == 0:
-        err_console.print("\n[bold]Phase 7[/bold] — no preview images to restore.")
+        err_console.print("\n[bold]Preview images[/bold] — no preview images to restore.")
         return
 
-    err_console.print(f"\n[bold]Phase 7[/bold] — restoring {total} preview image(s)…")
+    err_console.print(f"\n[bold]Preview images[/bold] — restoring {total} preview image(s)…")
 
     with _progress() as prog:
         task = prog.add_task("[cyan]Uploading preview images", total=total)
@@ -802,7 +1160,8 @@ def _import_preview_images(
                 continue
 
             new_gid = _resolve_new_gid(old_gid, state, "Preview image")
-            if not new_gid:
+            if not new_gid or new_gid in state.reused_templates:
+                # reused templates already exist on the target; leave them as they are
                 prog.advance(task)
                 continue
 
@@ -821,7 +1180,8 @@ def _import_preview_images(
 
             try:
                 with open(src, "rb") as fh:
-                    inv.set_image(new_gid, fh)
+                    # not inv.set_image: that PUT clears the item's tags
+                    set_item_image(inv, new_gid, fh)
             except Exception as exc:
                 _record_error(state, f"Preview image for {old_gid}: {exc}")
             prog.advance(task)
@@ -833,19 +1193,24 @@ def _import_template_icons(
     state: _ImportState,
     dry_run: bool,
     snapshot_dir: Path,
+    instrument_templates: Optional[List[Dict]] = None,
 ) -> None:
-    """Phase 8 — set icons for templates."""
+    """Phase 8 — set icons for sample and instrument templates.
+
+    Reused (identical, pre-existing) instrument templates are left untouched.
+    """
+    templates = list(templates) + list(instrument_templates or [])
     ico_dir = _icons_dir(snapshot_dir)
     if not ico_dir.exists():
-        err_console.print("\n[bold]Phase 8[/bold] — no icons directory; skipping.")
+        err_console.print("\n[bold]Template icons[/bold] — no icons directory; skipping.")
         return
 
     total = sum(1 for t in templates if (t.get("_migration") or {}).get("icon_local"))
     if total == 0:
-        err_console.print("\n[bold]Phase 8[/bold] — no template icons to restore.")
+        err_console.print("\n[bold]Template icons[/bold] — no template icons to restore.")
         return
 
-    err_console.print(f"\n[bold]Phase 8[/bold] — restoring {total} template icon(s)…")
+    err_console.print(f"\n[bold]Template icons[/bold] — restoring {total} template icon(s)…")
 
     for tmpl in templates:
         mig = tmpl.get("_migration") or {}
@@ -855,9 +1220,14 @@ def _import_template_icons(
 
         old_gid = tmpl["globalId"]
         new_gid = _resolve_new_gid(old_gid, state, "Template icon")
-        if not new_gid:
+        if not new_gid or new_gid in state.reused_templates:
             continue
         new_tmpl_id = parse_id(new_gid)
+        set_icon = (
+            inv.set_instrument_template_icon
+            if new_gid.startswith("NT")
+            else inv.set_sample_template_icon
+        )
 
         src = ico_dir / icon_local
         if not src.exists():
@@ -872,7 +1242,7 @@ def _import_template_icons(
 
         try:
             with open(src, "rb") as fh:
-                inv.set_sample_template_icon(new_tmpl_id, fh)
+                set_icon(new_tmpl_id, fh)
             console.print(f"  [green]✓[/green]  icon → template [cyan]{new_gid}[/cyan]")
         except Exception as exc:
             _record_error(state, f"Template icon for {old_gid}: {exc}")
@@ -903,16 +1273,27 @@ def migrate_import(
     skip_templates: bool = typer.Option(False, "--skip-templates", help="Skip Phase 1."),
     skip_containers: bool = typer.Option(False, "--skip-containers", help="Skip Phases 2 & 3."),
     skip_samples: bool = typer.Option(False, "--skip-samples", help="Skip Phases 4 & 5."),
-    skip_files: bool = typer.Option(False, "--skip-files", help="Skip Phases 6–8 (attachments, images, icons)."),
+    skip_instruments: bool = typer.Option(
+        False, "--skip-instruments", help="Skip instrument templates, instruments and their placements."
+    ),
+    skip_files: bool = typer.Option(False, "--skip-files", help="Skip attachments, images and icons."),
+    no_reuse_templates: bool = typer.Option(
+        False,
+        "--no-reuse-templates",
+        help="Always create instrument templates, even when an identical one exists on the target.",
+    ),
 ) -> None:
     """Import an inventory snapshot to the current RSpace server.
 
     Accepts a snapshot directory produced by 'rspace migrate export', or a
     legacy plain JSON snapshot file (no attachments will be restored in that case).
 
-    Recreates templates, containers, samples, subsample placements, attachments,
-    preview images, and template icons in eight ordered phases.  A checkpoint file
-    is written after each phase so a failed import can be resumed with --checkpoint.
+    Recreates templates, instrument templates, containers, samples, instruments,
+    subsample and instrument placements, attachments, preview images, and template
+    icons in ordered phases.  An instrument template identical to one already on the
+    target is reused instead of duplicated (disable with --no-reuse-templates).
+    A checkpoint file is written after each phase so a failed import can be
+    resumed with --checkpoint.
 
     To migrate between servers:
 
@@ -943,15 +1324,23 @@ def migrate_import(
         raise typer.Exit(1)
 
     schema_ver = blob.get("schema_version", 0)
-    if schema_ver != SCHEMA_VERSION:
+    if schema_ver > SCHEMA_VERSION:
         warn(
-            f"Snapshot schema version {schema_ver} does not match expected "
-            f"{SCHEMA_VERSION} — proceeding with caution."
+            f"Snapshot schema version {schema_ver} is newer than this rspacectl supports "
+            f"({SCHEMA_VERSION}) — unknown sections are ignored; consider upgrading."
         )
+    elif schema_ver < 2:
+        warn(
+            f"Snapshot schema version {schema_ver} predates the snapshot directory format "
+            "— proceeding with caution."
+        )
+    # Older snapshots simply lack the newer sections; they default to empty below.
 
     templates: List[Dict] = blob.get("templates", [])
     containers: List[Dict] = blob.get("containers", [])
     samples: List[Dict] = blob.get("samples", [])
+    instrument_templates: List[Dict] = blob.get("instrument_templates", [])
+    instruments: List[Dict] = blob.get("instruments", [])
     meta: Dict = blob.get("meta", {})
 
     if dry_run:
@@ -964,7 +1353,9 @@ def migrate_import(
     console.print(
         f"Contains: [green]{len(templates)}[/green] template(s)  "
         f"[green]{len(containers)}[/green] container(s)  "
-        f"[green]{len(samples)}[/green] sample(s)"
+        f"[green]{len(samples)}[/green] sample(s)  "
+        f"[green]{len(instrument_templates)}[/green] instrument template(s)  "
+        f"[green]{len(instruments)}[/green] instrument(s)"
     )
 
     # Resolve / load checkpoint
@@ -985,26 +1376,41 @@ def migrate_import(
 
     # Each phase is (number, key, label, skip_flag, runner-callable taking no args).
     # Wrapping each runner in a closure keeps the call-site declarative.
+    # Phase keys are stable checkpoint identifiers; new phases get new keys, so
+    # checkpoints written by older versions still resume correctly.
+    skip_instr = skip_instruments or not (instrument_templates or instruments)
     phases = [
-        (1, "templates", "templates", skip_templates,
+        ("templates", "templates", skip_templates,
          lambda: _import_templates(inv, templates, state, dry_run)),
-        (2, "containers_flat", "containers flat", skip_containers,
+        ("instrument_templates", "instrument templates", skip_instr or skip_templates,
+         lambda: _import_instrument_templates(
+             inv, instrument_templates, state, dry_run, reuse=not no_reuse_templates)),
+        ("containers_flat", "containers flat", skip_containers,
          lambda: _import_containers_flat(inv, containers, state, dry_run, snapshot_dir)),
-        (3, "containers_hierarchy", "container hierarchy", skip_containers,
+        ("containers_hierarchy", "container hierarchy", skip_containers,
          lambda: _import_container_hierarchy(inv, containers, state, dry_run)),
-        (4, "samples", "samples", skip_samples,
+        ("samples", "samples", skip_samples,
          lambda: _import_samples(inv, samples, state, dry_run, templates=templates)),
-        (5, "subsample_placements", "subsample placements", skip_samples,
+        ("instruments", "instruments", skip_instr,
+         lambda: _import_instruments(inv, instruments, state, dry_run)),
+        ("subsample_placements", "subsample placements", skip_samples,
          lambda: _import_subsample_placements(inv, samples, state, dry_run)),
-        (6, "attachments", "attachments", skip_files,
-         lambda: _import_attachments(inv, templates, containers, samples, state, dry_run, snapshot_dir)),
-        (7, "preview_images", "preview images", skip_files,
-         lambda: _import_preview_images(inv, templates, containers, samples, state, dry_run, snapshot_dir)),
-        (8, "template_icons", "template icons", skip_files,
-         lambda: _import_template_icons(inv, templates, state, dry_run, snapshot_dir)),
+        ("instrument_placements", "instrument placements", skip_instr,
+         lambda: _import_instrument_placements(inv, instruments, state, dry_run)),
+        ("attachments", "attachments", skip_files,
+         lambda: _import_attachments(
+             inv, templates, containers, samples, state, dry_run, snapshot_dir,
+             instrument_templates, instruments)),
+        ("preview_images", "preview images", skip_files,
+         lambda: _import_preview_images(
+             inv, templates, containers, samples, state, dry_run, snapshot_dir,
+             instrument_templates, instruments)),
+        ("template_icons", "template icons", skip_files,
+         lambda: _import_template_icons(
+             inv, templates, state, dry_run, snapshot_dir, instrument_templates)),
     ]
 
-    for num, key, label, skip, run in phases:
+    for num, (key, label, skip, run) in enumerate(phases, start=1):
         if skip or key in state.completed_phases:
             err_console.print(f"\n[dim]Phase {num} ({label}) — skipped.[/dim]")
             continue
