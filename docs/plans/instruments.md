@@ -21,17 +21,32 @@ From `rspace-client` 2.7.4 (`rspace_client/inv/inv.py`) and a live check on the 
 | template versioning | `update_instrument_to_latest_template_version`, `update_instrument_template_instruments` |
 | search | `ResultType.INSTRUMENT`, `ResultType.INSTRUMENT_TEMPLATE` |
 | generic item ops | `Id` knows `IN` → `instruments` and `NT` → `instrumentTemplates`, so `rename`, `upload_attachment_by_global_id` and raw `PUT /instruments/{id}` work |
-| **placement in containers** | **Gap.** Instruments have `parentContainers`/`parentLocation`, and containers expose `canStoreInstruments` and `contentSummary.instrumentCount`. But `Id.is_movable()` only accepts `SS`/`IC`, so `add_items_to_{list,grid,image}_container` reject `IN` IDs. |
+| **placement in containers** | Client gap: `Id.is_movable()` only accepts `SS`/`IC`, so `add_items_to_{list,grid,image}_container` reject `IN` IDs. **The server API covers it** (see "Placement" below). |
 | update | No `update_instrument` helper. Use `PUT /instruments/{id}`, as `update sample` already does for `/samples/{id}`. |
+| bulk create | The client docstring says instruments can't be imported from CSV, but the server's 2.27 spec documents `/import/parseFile?recordType=INSTRUMENTS` and `importSettings.instrumentSettings`. A possible later `import instruments`; not in v1. |
 
 **Prerequisite:** the `rspace-client>=2.7.4` bump being done in the other session must be
 on this branch first (rebase onto it once merged).
 
-**Placement gap, preferred fix:** send a small upstream PR to rspace-client that makes
-`Id.is_movable()` accept `IN`. Until it ships, use a local helper `_move_items(inv, target, gids, location=None)`
-in `rspacectl/utils.py`. It calls the same `PUT /containers/{id}` payload as the client's
-`_do_add_to_*` methods, skipping the movability check. Both `rspace move` and the migrate
-placement phase will use this helper, so the workaround lives in one place.
+### Placement (answer to open question 1, checked against the spec)
+
+Source: `rspace_api_inventory_specs_2_27_0.yaml`, served by the RSpace apiDocs page on demos.researchspace.com.
+
+- **Moving (documented):** `PUT /instruments/{id}` moves an instrument when the body has
+  `parentContainers: [{id}]`. Grid and image containers also need `parentLocation`
+  (`{coordX, coordY}` for grid, `{id}` for an image marker). This is the same shape as
+  subsamples and containers, so no container-side workaround is needed.
+- **At creation:** the `POST /instruments` body uses the `Instrument` schema, which inherits
+  `parentContainers`/`parentLocation` from `InventoryRecordInfo`. But the POST description and
+  examples never mention placement; only `importPidinst` documents a `newTargetLocation`.
+  **So placement at creation is probably accepted, but the docs don't promise it.**
+  Decision: create first, then move with `PUT`. That path is documented and works either way.
+  During implementation, run one live test against a dev/test server (with your OK). If POST
+  placement works, `create instrument --target` can send it in one call, keeping the PUT path as
+  the fallback.
+- One helper, `_place_instrument(inv, gid, container_id, location=None)`, in `rspacectl/utils.py`.
+  Both `rspace move` and the migrate placement phase use it. An upstream rspace-client PR making
+  `Id.is_movable()` accept `IN` is a nice-to-have, not a blocker.
 
 ## Naming conventions (match existing commands)
 
@@ -59,7 +74,7 @@ placement phase will use this helper, so the workaround lives in one place.
 ### 1.4 `create` (`commands/create.py`)
 - `create instrument NAME [--template NT…] [--field k=v ...] [--description] [--tag] [--target IC…]`
   - Reuse `_parse_fields`, `_build_fields_post` and `_validate_mandatory_fields` against `get_instrument_template_by_id`. These helpers are template-agnostic, so they only need their docstrings updated.
-  - `--target` places the instrument after creation, using the `_move_items` helper.
+  - `--target IC… [--row R --col C]` places the instrument after creation via `_place_instrument` (see Placement).
   - Optional `--from-csv` bulk path: **not in v1**, because the client has no bulk create for instruments.
 - `create instrument-template --from-file def.json`: mirrors `create template`; calls `create_instrument_template`.
 
@@ -71,12 +86,12 @@ placement phase will use this helper, so the workaround lives in one place.
 
 ### 1.6 `delete` (`commands/delete.py`)
 - `delete instrument ID...` and `delete instrument-template ID...` via `_batch_delete`.
-- Optional, to discuss: `restore` support. No other type has a restore command yet, so leave it out of v1 for consistency.
+- `restore`: **deferred** (decision). Add it later for all inventory types together.
 
 ### 1.7 Cross-cutting commands
 - `tag`: add `"instrument": "instruments"` and `"instrument-template": "instrumentTemplates"` to `_INV_ENDPOINTS`; update the help text.
 - `search`: add `"instruments": ResultType.INSTRUMENT` to `_INV_TYPE_MAP`.
-- `move`: accept `IN` IDs via `_move_items`; validate `canStoreInstruments` on the target and give a clear error if it is false.
+- `move`: accept `IN` IDs. Route them to `_place_instrument` (one PUT per instrument), and keep `SS`/`IC` on the existing `add_items_to_*` path. Mixed lists are allowed. Check `canStoreInstruments` on the target and give a clear error if it is false.
 - `upload attachment` / `download attachment`: these already work by GlobalID. Add tests and docs only.
 - `split`, `share` and `export` don't apply to instruments.
 
@@ -105,21 +120,42 @@ New phases. Phase *keys* stay stable and new keys are added, so existing checkpo
 | # | key | change |
 |---|---|---|
 | 1 | `templates` | unchanged |
-| 2 | `instrument_templates` | **new**: `create_instrument_template` from a sanitised payload (no `defaultUnitId`); map field IDs by position, like phase 1 |
+| 2 | `instrument_templates` | **new**: reuse an identical existing template if there is one (see 2.5), otherwise `create_instrument_template` from a sanitised payload (no `defaultUnitId`). Map field IDs by position, like phase 1. |
 | 3–4 | `containers_flat`, `containers_hierarchy` | unchanged |
 | 5 | `samples` | unchanged |
 | 6 | `instruments` | **new**: `create_instrument` with the mapped `templateId` and fields mapped by name (reuse `_field_updates_by_name` / `_build_tmpl_field_name_map`), plus tags, description and barcodes |
 | 7 | `subsample_placements` | unchanged |
-| 8 | `instrument_placements` | **new**: same GRID/IMAGE/LIST logic as subsamples, through `_move_items`. Refactor the shared body of `_import_subsample_placements` into a `_place_items` helper so both phases use one implementation. Items whose parent is a workbench (`BE…`) are left on the importing user's bench, as subsamples are today. |
+| 8 | `instrument_placements` | **new**: same GRID/IMAGE/LIST target resolution as subsamples (including the image-marker lookup), but the move goes through `_place_instrument` (`PUT /instruments/{id}`). Pull the shared "resolve target container + location" code out of `_import_subsample_placements` so both phases use it. Items whose parent is a workbench (`BE…`) stay on the importing user's bench, as subsamples do today. |
 | 9–11 | `attachments`, `preview_images`, `template_icons` | extended via `_all_items_with_globalid`. Icons go to `set_instrument_template_icon` for `NT` IDs. |
 
 - New flag `--skip-instruments` (skips phases 2, 6 and 8). `--skip-templates` keeps its current meaning.
 - `--dry-run` uses the identity mapping, as the existing phases do.
 - Update the module docstrings in `migrate/__init__.py` (snapshot layout, phase list) and the re-export list.
 
-### 2.4 Tests (`tests/test_migrate.py`)
+### 2.4 Out of scope (decisions)
+- Owner and sharing are **not** migrated, same as every other type today.
+
+### 2.5 Reusing identical instrument templates (decision: yes, only if identical)
+Instrument templates are often shared, for example the sysadmin-provided "Instrument (PIDINST 1.0)".
+Creating a copy on every import would multiply them, so phase 2 reuses an existing template when it is **identical**:
+
+- At the start of phase 2, fetch all instrument templates visible on the target (full records).
+- Build a canonical fingerprint for each template and for each snapshot template:
+  `name`, `description`, and the ordered list of field definitions (`name`, `type`, `mandatory`,
+  options / `selectedOptions` definitions, `defaultValue`, unit or other type-specific definition).
+  Strip all server keys (`_RESOURCE_SERVER_KEYS`, `_FIELD_SERVER_KEYS`, `version`, `owner`, icon).
+- If exactly one target template matches, map old → existing GlobalID, map field IDs by position,
+  and log `↺ reused NT… (identical)`. Nothing is created and no icon is uploaded for it (it's not ours).
+- If more than one matches, reuse the lowest ID and log that duplicates exist. If there's no exact
+  match (even when only the name matches), create a new template, and warn when the name collides
+  so the user knows why there are two.
+- `--no-reuse-templates` forces creation, for users who want a clean, separate copy.
+- Dry run reports "would reuse" or "would create" for each template.
+- Follow-up, not in this plan: the same matching could apply to sample templates in phase 1.
+
+### 2.6 Tests (`tests/test_migrate.py`)
 - Export: instruments found via a container walk; `--instrument` auto-includes its template.
-- Import: instrument template and instrument creation with field mapping; placement into GRID, LIST and IMAGE containers; checkpoint resume from a v2-era checkpoint (old keys only); v2 snapshot without instrument keys.
+- Import: identical template reused (no create call, field ID mapping correct); near-identical template (one field option differs) gets created, with a name-collision warning; `--no-reuse-templates`; instrument creation with field mapping; placement into GRID, LIST and IMAGE containers; checkpoint resume from a v2-era checkpoint (old keys only); v2 snapshot without instrument keys.
 
 ## Part 3: Docs
 - README: add instruments to `list`, `get`, `create`, `update`, `tag`, `delete`, `search`, `move` and `migrate`, and to the GlobalID prefix table (`IN`, `NT`).
@@ -128,14 +164,15 @@ New phases. Phase *keys* stay stable and new keys are added, so existing checkpo
 ## Suggested delivery order (separate commits or PRs)
 1. Rebase onto the `rspace-client>=2.7.4` bump.
 2. IDs, `list`, `get`, `search`, `tag` (read-only and low risk).
-3. `create`, `update`, `delete`, `move`, plus the `_move_items` helper.
+3. `create`, `update`, `delete`, `move`, plus the `_place_instrument` helper and the live POST-placement check.
 4. Migrate export.
 5. Migrate import (phases 2, 6 and 8) and the `_place_items` refactor.
 6. README.
-7. Upstream rspace-client PR for `Id.is_movable()`; drop the workaround once it is released.
+7. Optional: upstream rspace-client PR adding `IN` to `Id.is_movable()` and an `update_instrument` helper.
 
-## Open questions
-1. Does `POST /instruments` accept a target location at creation, as samples do with `TargetLocation`? If it does, `create instrument --target` and the migrate placement can be done in one call. Verify against the API docs or a test server.
-2. Should migrate keep instrument **owner/sharing**? Current migrate doesn't do this for any type, so the proposal is no.
-3. `restore` for deleted instruments: add it now (the client supports it) or keep parity with the other types?
-4. Instrument templates often come from a sysadmin-provided PIDINST template. On import, should a template whose name matches an existing target template be reused instead of duplicated (for example, a `--reuse-templates` flag)?
+## Decisions (2026-10-20)
+1. Placement at creation: checked against the 2.27 spec. Move-by-PUT is documented, placement in
+   POST is implied by the schema but not documented. Create, then PUT; one live check during implementation.
+2. Owner and sharing are not migrated.
+3. `restore`: later, for all inventory types together.
+4. Reuse an existing instrument template on import only when it is identical (section 2.5).
