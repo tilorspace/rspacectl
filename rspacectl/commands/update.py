@@ -50,7 +50,7 @@ def update_document(
         None,
         "--field-id",
         help="Target a specific field by its numeric ID (use with --content). "
-        "Find field IDs with: rspace get SD123 -o json",
+        "Find field IDs with: rspace -o json get SD123",
     ),
     field_index: int = typer.Option(
         0,
@@ -65,7 +65,7 @@ def update_document(
     [bold]--field-index[/bold] (for --append / --prepend). Field IDs and indices
     can be found by inspecting the document:
 
-      rspace get SD123 -o json
+      rspace -o json get SD123
     """
     ctx = get_context()
     columns = [COL_GLOBAL_ID, COL_NAME_40, ColumnDef("tags", "Tags", 30), COL_MODIFIED]

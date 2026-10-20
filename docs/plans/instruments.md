@@ -1,7 +1,7 @@
 # Plan: Instrument support in rspacectl
 
 Branch: `feat/instruments` (from `main`)
-Status: plan, not implemented
+Status: implemented on `feat/instruments` (PR #5). Kept as the design record.
 
 ## Goal
 

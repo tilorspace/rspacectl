@@ -301,6 +301,19 @@ class TestCreateSampleQuantity:
         assert qty._toDict() == {"numericValue": 1.5, "unitId": 3}
 
 
+class TestCreateSampleName:
+    def test_from_csv_needs_no_name(self, app_context, mock_inv, monkeypatch, tmp_path):
+        calls = []
+        monkeypatch.setattr(create, "_bulk_create_from_csv", lambda *a: calls.append(a))
+        create.create_sample(**_sample_kwargs(name=None, from_csv=tmp_path / "s.csv"))
+        assert len(calls) == 1
+        mock_inv.create_sample.assert_not_called()
+
+    def test_name_required_without_csv(self, app_context, mock_inv):
+        with pytest.raises(typer.Exit):
+            create.create_sample(**_sample_kwargs(name=None))
+        mock_inv.create_sample.assert_not_called()
+
 # ---------------------------------------------------------------------------
 # Found by the live end-to-end run (scripts/e2e_review_fixes.py)
 # ---------------------------------------------------------------------------

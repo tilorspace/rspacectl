@@ -163,7 +163,9 @@ def _validate_mandatory_fields(template_fields: list, field_values: dict) -> Non
 
 @app.command("sample")
 def create_sample(
-    name: str = typer.Option(..., "--name", "-n", help="Sample name."),
+    name: Optional[str] = typer.Option(
+        None, "--name", "-n", help="Sample name (required unless --from-csv is given)."
+    ),
     template: Optional[str] = typer.Option(None, "--template", help="Sample template ID."),
     field: Optional[List[str]] = typer.Option(
         None, "--field", help="Template field value as NAME=VALUE. Repeatable."
@@ -200,6 +202,8 @@ def create_sample(
     if from_csv:
         _bulk_create_from_csv(ctx, from_csv, columns)
         return
+    if not name:
+        exit_with_error("Missing option '--name' (or use --from-csv for bulk creation).")
 
     # The API wants a plain date: a datetime is serialised with a time part
     # and rejected with HTTP 400.
