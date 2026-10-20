@@ -3,7 +3,8 @@
 RSpace uses two ID formats:
 - Numeric:  12345
 - GlobalID: SD12345 (documents), SA12345 (samples), SS12345 (subsamples),
-            IC12345 (containers), IT12345 (templates), GL12345 (gallery files)
+            IC12345 (containers), IT12345 (templates), GL12345 (gallery files),
+            IN12345 (instruments), NT12345 (instrument templates)
 
 All CLI commands accept either format.
 """
@@ -22,6 +23,8 @@ GLOBAL_ID_PREFIXES = {
     "SS": "subsample",
     "IC": "container",
     "IT": "template",
+    "IN": "instrument",
+    "NT": "instrument-template",
     "BE": "bench",
     "GF": "group",
 }

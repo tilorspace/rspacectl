@@ -264,6 +264,52 @@ def list_containers(
 
 
 # ---------------------------------------------------------------------------
+# instruments
+# ---------------------------------------------------------------------------
+
+
+@app.command("instruments")
+def list_instruments(
+    query: Optional[str] = typer.Option(
+        None, "--query", "-q", help="Search query (name, description, tags)."
+    ),
+    owned_by: Optional[str] = typer.Option(None, "--owned-by", help="Filter by owner username."),
+    deleted: bool = typer.Option(False, "--deleted", help="Include deleted instruments."),
+    page: int = typer.Option(0, "--page"),
+    page_size: int = typer.Option(20, "--page-size"),
+    order_by: Optional[str] = typer.Option(
+        None, "--order-by", help="Sort field: name, created, lastModified."
+    ),
+    sort_order: str = typer.Option("asc", "--sort-order"),
+) -> None:
+    """List inventory instruments."""
+    ctx = get_context()
+    columns = [
+        COL_GLOBAL_ID,
+        COL_NAME_35,
+        ColumnDef("parentContainers.0.globalId", "Location", 12),
+        COL_CREATED,
+        COL_OWNER,
+    ]
+    try:
+        pagination = _inv_pagination(page, page_size, order_by, sort_order)
+        if query:
+            result = ctx.inv.search(
+                query=query, pagination=pagination, result_type=ResultType.INSTRUMENT
+            )
+            data = result.get("records", [])
+        else:
+            deleted_filter = DeletedItemFilter.INCLUDE if deleted else DeletedItemFilter.EXCLUDE
+            search_filter = SearchFilter(deleted_item_filter=deleted_filter, owned_by=owned_by)
+            result = ctx.inv.list_instruments(pagination=pagination, search_filter=search_filter)
+            data = result.get("instruments", [])
+    except Exception as e:
+        handle_api_error(e)
+    print_result(data, columns, ctx.output)
+    print_page_info(result, len(data))
+
+
+# ---------------------------------------------------------------------------
 # files
 # ---------------------------------------------------------------------------
 
@@ -357,6 +403,29 @@ def list_templates(
     try:
         pagination = _inv_pagination(page, page_size, None, "asc")
         result = ctx.inv.list_sample_templates(pagination=pagination)
+        data = result.get("templates", [])
+    except Exception as e:
+        handle_api_error(e)
+    print_result(data, columns, ctx.output)
+    print_page_info(result, len(data))
+
+
+# ---------------------------------------------------------------------------
+# instrument-templates
+# ---------------------------------------------------------------------------
+
+
+@app.command("instrument-templates")
+def list_instrument_templates(
+    page: int = typer.Option(0, "--page"),
+    page_size: int = typer.Option(20, "--page-size"),
+) -> None:
+    """List inventory instrument templates."""
+    ctx = get_context()
+    columns = [COL_GLOBAL_ID, COL_NAME_35, COL_CREATED, COL_MODIFIED, COL_OWNER]
+    try:
+        pagination = _inv_pagination(page, page_size, None, "asc")
+        result = ctx.inv.list_instrument_templates(pagination=pagination)
         data = result.get("templates", [])
     except Exception as e:
         handle_api_error(e)

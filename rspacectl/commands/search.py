@@ -16,12 +16,13 @@ from ..output import (
     print_result,
 )
 
-_TYPE_CHOICES = ["documents", "samples", "subsamples", "containers", "all"]
+_TYPE_CHOICES = ["documents", "samples", "subsamples", "containers", "instruments", "all"]
 
 _INV_TYPE_MAP = {
     "samples": ResultType.SAMPLE,
     "subsamples": ResultType.SUBSAMPLE,
     "containers": ResultType.CONTAINER,
+    "instruments": ResultType.INSTRUMENT,
 }
 
 _COMBINED_COLUMNS = [

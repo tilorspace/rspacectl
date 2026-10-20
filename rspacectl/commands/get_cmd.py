@@ -8,6 +8,8 @@ The resource type can be given explicitly or inferred from a GlobalID prefix:
   rspace get SS101          # subsample  (inferred)
   rspace get IC202          # container  (inferred)
   rspace get IT303          # template   (inferred)
+  rspace get IN707          # instrument (inferred)
+  rspace get NT808          # instrument template (inferred)
   rspace get FM404          # form       (inferred)
   rspace get GL505          # file       (inferred)
   rspace get FL606          # folder     (inferred)
@@ -207,6 +209,49 @@ def _get_template(id: str) -> None:
         _print_template_fields(result.get("fields", []))
 
 
+def _get_instrument(id: str) -> None:
+    ctx = get_context()
+    columns = [
+        COL_GLOBAL_ID,
+        COL_NAME_35,
+        ColumnDef("description", "Description", 40),
+        ColumnDef("templateId", "Template", 10),
+        ColumnDef("parentContainers.0.globalId", "Location", 12),
+        ColumnDef("tags", "Tags", 30),
+        COL_CREATED,
+        COL_OWNER,
+    ]
+    try:
+        result = ctx.inv.get_instrument_by_id(parse_id(id))
+    except Exception as e:
+        handle_api_error(e)
+        return  # handle_api_error always exits, but be explicit
+    print_single(result, ctx.output, columns)
+    if ctx.output == OutputFormat.TABLE:
+        _print_template_fields(result.get("fields", []))
+
+
+def _get_instrument_template(id: str) -> None:
+    ctx = get_context()
+    columns = [
+        COL_GLOBAL_ID,
+        COL_NAME_35,
+        ColumnDef("description", "Description", 40),
+        ColumnDef("version", "Version", 8),
+        COL_CREATED,
+        COL_MODIFIED,
+        COL_OWNER,
+    ]
+    try:
+        result = ctx.inv.get_instrument_template_by_id(parse_id(id))
+    except Exception as e:
+        handle_api_error(e)
+        return  # handle_api_error always exits, but be explicit
+    print_single(result, ctx.output, columns)
+    if ctx.output == OutputFormat.TABLE:
+        _print_template_fields(result.get("fields", []))
+
+
 def _get_file(id: str) -> None:
     ctx = get_context()
     columns = [
@@ -264,6 +309,8 @@ _DISPATCH = {
     "bench": _get_container,
     "form": _get_form,
     "template": _get_template,
+    "instrument": _get_instrument,
+    "instrument-template": _get_instrument_template,
     "file": _get_file,
 }
 
@@ -280,6 +327,10 @@ _TYPE_ALIASES = {
     "cont": "container",
     "tmpl": "template",
     "templ": "template",
+    "inst": "instrument",
+    "instr": "instrument",
+    "itmpl": "instrument-template",
+    "instrument_template": "instrument-template",
 }
 
 
@@ -319,6 +370,8 @@ def get(
       rspace get SS202        subsample
       rspace get IC303        container
       rspace get IT404        sample template
+      rspace get IN707        instrument
+      rspace get NT808        instrument template
       rspace get FM505        form
       rspace get GL606        gallery file
 
