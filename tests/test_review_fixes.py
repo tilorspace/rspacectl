@@ -9,9 +9,10 @@ import datetime
 
 import pytest
 import typer
-from rspace_client.inv.inv import BulkOperationResult, SamplePost
+from rspace_client.inv.inv import BulkOperationResult, ByLocation, SamplePost
 
-from rspacectl.commands import create, delete, get_cmd, split
+from rspacectl.commands import create, delete, get_cmd, list_cmd, move, split
+from rspacectl.commands.list_cmd import _inv_pagination
 from rspacectl.ids import check_id_type
 
 TAGS = [{"value": "sst"}, {"value": "keep"}]
@@ -84,11 +85,14 @@ class TestDeleteTypeMismatch:
     def test_mismatch_deletes_nothing(self, app_context, mock_inv):
         with pytest.raises(typer.Exit):
             delete.delete_instrument(["IN1", "SA905"])
-        mock_inv.delete_instrument.assert_not_called()
+        mock_inv.doDelete.assert_not_called()
 
     def test_matching_ids_are_deleted(self, app_context, mock_inv):
         delete.delete_instrument(["IN1", "2"])
-        assert [c.args for c in mock_inv.delete_instrument.call_args_list] == [(1,), (2,)]
+        assert [c.args for c in mock_inv.doDelete.call_args_list] == [
+            ("instruments", 1),
+            ("instruments", 2),
+        ]
 
     def test_container_rejects_sample(self, app_context, mock_inv):
         with pytest.raises(typer.Exit):
@@ -98,7 +102,7 @@ class TestDeleteTypeMismatch:
     def test_document_rejects_form(self, app_context, mock_eln):
         with pytest.raises(typer.Exit):
             delete.delete_document(["FM5"])
-        mock_eln.delete_document.assert_not_called()
+        mock_eln.doDelete.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -139,30 +143,34 @@ class TestSplit:
         mock_inv.split_subsample.assert_not_called()
 
     def test_quantity_split_restores_tags(self, app_context, mock_inv, capsys):
-        mock_inv.get_subsample_by_id.return_value = {"id": 1, "globalId": "SS1", "tags": TAGS}
+        original = {"id": 1, "globalId": "SS1", "tags": TAGS}
+        mock_inv.get_subsample_by_id.return_value = original
         mock_inv.split_subsample.return_value = _bulk(
-            {"id": 1, "globalId": "SS1", "tags": []},
-            {"id": 2, "globalId": "SS2", "tags": []},
-            {"id": 3, "globalId": "SS3", "tags": []},
+            *({"id": i, "globalId": f"SS{i}", "tags": []} for i in (1, 2, 3))
         )
         mock_inv.retrieve_api_results.side_effect = lambda path, **kw: {
-            "id": int(path.rsplit("/", 1)[1]),
-            "globalId": "SS" + path.rsplit("/", 1)[1],
-            "tags": kw["params"]["tags"],
+            "status": "COMPLETED",
+            "results": [
+                {"record": {**r, "globalId": f"SS{r['id']}"}, "error": None}
+                for r in kw["params"]["records"]
+            ],
         }
 
         split.split("SS1", count=2, quantity=0.1)
 
-        assert mock_inv.split_subsample.call_args.kwargs["subsample"] == "SS1"
-        puts = [
-            (c.args[0], c.kwargs["params"])
-            for c in mock_inv.retrieve_api_results.call_args_list
-            if c.kwargs.get("request_type") == "PUT"
-        ]
-        assert puts == [(f"/subSamples/{i}", {"tags": TAGS}) for i in (1, 2, 3)]
+        # the fetched record is handed to the client, so it doesn't GET again
+        mock_inv.get_subsample_by_id.assert_called_once_with(1)
+        assert mock_inv.split_subsample.call_args.kwargs["subsample"] is original
+        mock_inv.retrieve_api_results.assert_called_once()
+        call = mock_inv.retrieve_api_results.call_args
+        assert call.args[0] == "/bulk" and call.kwargs["request_type"] == "POST"
+        assert call.kwargs["params"] == {
+            "operationType": "UPDATE",
+            "records": [{"type": "SUBSAMPLE", "id": i, "tags": TAGS} for i in (1, 2, 3)],
+        }
         assert "Created 2 new subsample(s)" in capsys.readouterr().out
 
-    def test_quantity_split_without_tags_skips_puts(self, app_context, mock_inv):
+    def test_quantity_split_without_tags_skips_restore(self, app_context, mock_inv):
         mock_inv.get_subsample_by_id.return_value = {"id": 1, "globalId": "SS1", "tags": []}
         mock_inv.split_subsample.return_value = _bulk({"id": 1}, {"id": 2})
         split.split("SS1", count=1, quantity=0.1)
@@ -235,7 +243,6 @@ class TestDeleteDocumentEndpoint:
     def test_uses_documents_endpoint_without_double_slash(self, app_context, mock_eln):
         delete.delete_document(["SD5"])
         mock_eln.doDelete.assert_called_once_with("documents", 5)
-        mock_eln.delete_document.assert_not_called()
 
 
 class TestGetWorkbench:
@@ -254,13 +261,17 @@ class TestGetWorkbench:
         mock_inv.retrieve_api_results.assert_called_once_with("/workbenches/2?includeContent=true")
 
     def test_numeric_container_id_falls_back_to_workbench(self, app_context, mock_inv):
-        mock_inv.get_container_by_id.side_effect = Exception("Container with id 2 is a workbench")
+        err = Exception("Container with id 2 is a workbench")
+        err.response_status_code = 422
+        mock_inv.get_container_by_id.side_effect = err
         mock_inv.retrieve_api_results.return_value = self.BENCH
         get_cmd.get("container", "2", subsamples=False, content=False)
         mock_inv.retrieve_api_results.assert_called_once_with("/workbenches/2?includeContent=false")
 
     def test_ic_prefix_does_not_fall_back(self, app_context, mock_inv):
-        mock_inv.get_container_by_id.side_effect = Exception("Container with id 2 is a workbench")
+        err = Exception("Container with id 2 is a workbench")
+        err.response_status_code = 422
+        mock_inv.get_container_by_id.side_effect = err
         with pytest.raises(typer.Exit):
             get_cmd.get("IC2", None, subsamples=False, content=False)
         mock_inv.retrieve_api_results.assert_not_called()
@@ -283,8 +294,6 @@ class TestInventoryOrderBy:
         [("created", "creationDate"), ("lastModified", "modificationDate"), ("name", "name")],
     )
     def test_cli_names_are_mapped(self, given, sent):
-        from rspacectl.commands.list_cmd import _inv_pagination
-
         assert _inv_pagination(0, 20, given, "desc").data["orderBy"] == f"{sent} desc"
 
 
@@ -304,8 +313,6 @@ class TestListQueryFilters:
 
     @pytest.mark.parametrize("command", ["list_samples", "list_instruments"])
     def test_query_passes_deleted_and_owner(self, app_context, mock_inv, command):
-        from rspacectl.commands import list_cmd
-
         mock_inv.retrieve_api_results.return_value = {"records": [], "totalHits": 0}
         getattr(list_cmd, command)(**self._kwargs(deleted=True, owned_by="alice"))
         params = mock_inv.retrieve_api_results.call_args.kwargs["params"]
@@ -313,25 +320,19 @@ class TestListQueryFilters:
         assert params["ownedBy"] == "alice"
 
     def test_query_without_filters_sends_none(self, app_context, mock_inv):
-        from rspacectl.commands import list_cmd
-
         mock_inv.retrieve_api_results.return_value = {"records": [], "totalHits": 0}
         list_cmd.list_samples(**self._kwargs())
         params = mock_inv.retrieve_api_results.call_args.kwargs["params"]
-        assert "deletedItems" not in params and "ownedBy" not in params
+        assert params["deletedItems"] == "EXCLUDE" and "ownedBy" not in params
 
 
 class TestMoveTargets:
     def test_subsample_into_list_container(self, app_context, mock_inv):
-        from rspacectl.commands import move
-
         mock_inv.get_container_by_id.return_value = {"cType": "LIST", "gridLayout": None}
         move.move(["SS1"], target="IC5", strategy=None, row=None, col=None)
         mock_inv.add_items_to_list_container.assert_called_once_with(5, "SS1")
 
     def test_instrument_onto_workbench(self, app_context, mock_inv):
-        from rspacectl.commands import move
-
         mock_inv.retrieve_api_results.side_effect = lambda path, **kw: (
             {"id": 2, "globalId": "BE2", "cType": "WORKBENCH"}
             if path.startswith("/workbenches/")
@@ -345,6 +346,23 @@ class TestMoveTargets:
         assert put.kwargs["params"]["parentContainers"] == [{"id": 2}]
         mock_inv.get_container_by_id.assert_not_called()
 
+    def test_subsample_into_grid_cell(self, app_context, mock_inv):
+        mock_inv.get_container_by_id.return_value = {
+            "cType": "GRID",
+            "gridLayout": {"columnsNumber": 3, "rowsNumber": 2},
+        }
+        move.move(["SS1"], target="IC5", strategy=None, row=2, col=1)
+        placement = mock_inv.add_items_to_grid_container.call_args.kwargs["grid_placement"]
+        assert isinstance(placement, ByLocation)
+        assert (placement.locations[0].x, placement.locations[0].y) == (1, 2)
+
+    @pytest.mark.parametrize("ids", [["SS1"], ["IN1"]])
+    def test_non_container_target_exits(self, app_context, mock_inv, ids):
+        with pytest.raises(typer.Exit):
+            move.move(ids, target="SA5", strategy=None, row=None, col=None)
+        mock_inv.get_container_by_id.assert_not_called()
+        mock_inv.retrieve_api_results.assert_not_called()
+
 
 class TestDeleteReportsRefusals:
     def test_sample_refused_with_http_200(self, app_context, mock_inv):
@@ -357,20 +375,11 @@ class TestDeleteReportsRefusals:
         mock_inv.doDelete.return_value = {"id": 5, "deleted": True}
         delete.delete_sample(["SA5"])
 
-    def test_none_response_counts_as_success(self, app_context, mock_inv):
-        mock_inv.delete_instrument.return_value = None
-        delete.delete_instrument(["IN5"])
+    def test_instrument_refusal_reported_too(self, app_context, mock_inv):
+        mock_inv.doDelete.return_value = {"id": 5, "deleted": False}
+        with pytest.raises(typer.Exit):
+            delete.delete_instrument(["IN5"])
 
-    def test_subsample_into_grid_cell(self, app_context, mock_inv):
-        from rspace_client.inv.inv import ByLocation
-
-        from rspacectl.commands import move
-
-        mock_inv.get_container_by_id.return_value = {
-            "cType": "GRID",
-            "gridLayout": {"columnsNumber": 3, "rowsNumber": 2},
-        }
-        move.move(["SS1"], target="IC5", strategy=None, row=2, col=1)
-        placement = mock_inv.add_items_to_grid_container.call_args.kwargs["grid_placement"]
-        assert isinstance(placement, ByLocation)
-        assert (placement.locations[0].x, placement.locations[0].y) == (1, 2)
+    def test_empty_response_counts_as_success(self, app_context, mock_eln):
+        mock_eln.doDelete.return_value = None
+        delete.delete_folder(["FL5"])

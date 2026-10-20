@@ -59,24 +59,22 @@ def _inv_pagination(
     )
 
 
-def _inv_search(
-    inv,
-    query: str,
-    pagination: Pagination,
-    result_type: ResultType,
-    deleted: bool,
-    owned_by: Optional[str],
-) -> dict:
-    """GET /search with the --deleted / --owned-by filters.
+def _inv_filter(deleted: bool, owned_by: Optional[str]) -> SearchFilter:
+    deleted_filter = DeletedItemFilter.INCLUDE if deleted else DeletedItemFilter.EXCLUDE
+    return SearchFilter(deleted_item_filter=deleted_filter, owned_by=owned_by)
 
-    The client's ``search`` has no filter arguments, so ``list … -q`` used to
-    ignore --deleted and --owned-by; the endpoint itself supports both.
+
+def _inv_search(
+    inv, query: str, pagination: Pagination, result_type: ResultType, search_filter: SearchFilter
+) -> dict:
+    """GET /search with --deleted / --owned-by applied.
+
+    The client's ``search`` takes no filter, so ``list … -q`` used to ignore
+    --deleted and --owned-by; the endpoint itself supports both.
     """
-    params = {"query": query, "resultType": result_type.name, **pagination.data}
-    if deleted:
-        params["deletedItems"] = DeletedItemFilter.INCLUDE.name
-    if owned_by:
-        params["ownedBy"] = owned_by
+    params = {"query": query, "resultType": result_type.name}
+    params.update(pagination.data)
+    params.update(search_filter.data)
     return inv.retrieve_api_results("/search", params=params)
 
 
@@ -201,13 +199,12 @@ def list_samples(
     ]
     try:
         pagination = _inv_pagination(page, page_size, order_by, sort_order)
+        search_filter = _inv_filter(deleted, owned_by)
         if query:
-            result = _inv_search(ctx.inv, query, pagination, ResultType.SAMPLE, deleted, owned_by)
+            result = _inv_search(ctx.inv, query, pagination, ResultType.SAMPLE, search_filter)
             data = result.get("records", [])
         else:
-            deleted_filter = DeletedItemFilter.INCLUDE if deleted else DeletedItemFilter.EXCLUDE
-            sample_filter = SearchFilter(deleted_item_filter=deleted_filter, owned_by=owned_by)
-            result = ctx.inv.list_samples(pagination=pagination, sample_filter=sample_filter)
+            result = ctx.inv.list_samples(pagination=pagination, sample_filter=search_filter)
             data = result.get("samples", [])
     except Exception as e:
         handle_api_error(e)
@@ -319,14 +316,11 @@ def list_instruments(
     ]
     try:
         pagination = _inv_pagination(page, page_size, order_by, sort_order)
+        search_filter = _inv_filter(deleted, owned_by)
         if query:
-            result = _inv_search(
-                ctx.inv, query, pagination, ResultType.INSTRUMENT, deleted, owned_by
-            )
+            result = _inv_search(ctx.inv, query, pagination, ResultType.INSTRUMENT, search_filter)
             data = result.get("records", [])
         else:
-            deleted_filter = DeletedItemFilter.INCLUDE if deleted else DeletedItemFilter.EXCLUDE
-            search_filter = SearchFilter(deleted_item_filter=deleted_filter, owned_by=owned_by)
             result = ctx.inv.list_instruments(pagination=pagination, search_filter=search_filter)
             data = result.get("instruments", [])
     except Exception as e:

@@ -16,8 +16,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from _e2e import field_values, setup, tags
+from _e2e import field_values, location, setup, tags
 
+from rspacectl.ids import parse_id
 from rspacectl.utils import put_inventory_item
 
 P = "rspacectl-review-e2e-instr-"
@@ -43,12 +44,6 @@ def create(kind, *args):
     if rc == 0 and data:
         created[kind].append(data["globalId"])
     return rc, data, err
-
-
-def location(rec):
-    parent = (rec.get("parentContainers") or [{}])[0].get("globalId")
-    loc = rec.get("parentLocation") or {}
-    return parent, (loc.get("coordY"), loc.get("coordX")) if loc.get("coordX") else None
 
 
 try:
@@ -83,7 +78,7 @@ try:
     rc, noinst, _ = create("container", "--name", P + "noinstr")
     lst, grid, noinst = lst["globalId"], grid["globalId"], noinst["globalId"]
     inv = e.inv()
-    put_inventory_item(inv, "containers", int(noinst[2:]), {"canStoreInstruments": False})
+    put_inventory_item(inv, "containers", parse_id(noinst), {"canStoreInstruments": False})
     check(
         "container set to canStoreInstruments=false",
         get(noinst).get("canStoreInstruments") is False,
@@ -156,7 +151,7 @@ try:
         fv,
     )
     check("tags and description stored", tags(a) == ["i1", "i2"] and a["description"] == "first")
-    check("templateId points to the new template", a.get("templateId") == int(nt_gid[2:]))
+    check("templateId points to the new template", a.get("templateId") == parse_id(nt_gid))
     check("default location is the workbench", location(a)[0].startswith("BE"), location(a))
     bench = location(a)[0]
 
@@ -165,11 +160,8 @@ try:
     check("B stored in list container", location(get(b["globalId"]))[0] == lst)
     rc, c, err = create("instrument", "--name", P + "C", "--target", grid, "--row", 2, "--col", 3)
     check("create --target GRID --row 2 --col 3 exits 0", rc == 0, err)
-    check(
-        "C in grid cell row 2 / col 3",
-        location(get(c["globalId"])) == (grid, (2, 3)),
-        location(get(c["globalId"])),
-    )
+    c_loc = location(get(c["globalId"]))
+    check("C in grid cell row 2 / col 3", c_loc == (grid, (2, 3)), c_loc)
     rc, d, err = create(
         "instrument", "--name", P + "D", "--template", nt_gid, "--field", "Serial number=SN-4"
     )
@@ -231,7 +223,8 @@ try:
     rc, _, _, err = run("update", "instrument", a)
     check("update with nothing to do exits 1", rc == 1, err)
     rc, _, _, err = run("update", "instrument", a, "--tag", "x1")
-    check("update --tag replaces tags", rc == 0 and tags(get(a)) == ["x1"], tags(get(a)))
+    a_tags = tags(get(a))
+    check("update --tag replaces tags", rc == 0 and a_tags == ["x1"], a_tags)
     rc, _, _, err = run("tag", a, "t1,t2", fmt="table")
     check("tag IN…", rc == 0 and tags(get(a)) == ["t1", "t2"], err)
     rc, _, _, err = run("tag", nt_gid, "nt1", fmt="table")
@@ -245,18 +238,16 @@ try:
         t2["version"] > t["version"],
         (t["version"], t2["version"]),
     )
-    check(
-        "A reports the old template version",
-        get(a).get("templateVersion") == t["version"],
-        get(a).get("templateVersion"),
-    )
+    a_version = get(a).get("templateVersion")
+    check("A reports the old template version", a_version == t["version"], a_version)
     rc, _, _, err = run("update", "instrument", a, "--latest-template")
+    x = get(a)
     check(
         "update instrument --latest-template",
-        rc == 0 and get(a).get("templateVersion") == t2["version"],
+        rc == 0 and x.get("templateVersion") == t2["version"],
         err,
     )
-    check("tags survive --latest-template", tags(get(a)) == ["t1", "t2"], tags(get(a)))
+    check("tags survive --latest-template", tags(x) == ["t1", "t2"], tags(x))
     rc, _, _, err = run("update", "instrument-template", nt_gid, "--propagate")
     check(
         "update instrument-template --propagate updates D",
@@ -269,14 +260,12 @@ try:
     # ------------------------------------------------------------------ move
     e.section("move")
     rc, _, _, err = run("move", a, "--target", lst, fmt="table")
-    check("move IN… to list container", rc == 0 and location(get(a))[0] == lst, err)
-    check("tags survive move", tags(get(a)) == ["t1", "t2"], tags(get(a)))
+    x = get(a)
+    check("move IN… to list container", rc == 0 and location(x)[0] == lst, err)
+    check("tags survive move", tags(x) == ["t1", "t2"], tags(x))
     rc, _, _, err = run("move", a, "--target", grid, "--row", 1, "--col", 2, fmt="table")
-    check(
-        "move IN… to grid cell 1/2",
-        rc == 0 and location(get(a)) == (grid, (1, 2)),
-        f"{err} {location(get(a))}",
-    )
+    a_loc = location(get(a))
+    check("move IN… to grid cell 1/2", rc == 0 and a_loc == (grid, (1, 2)), f"{err} {a_loc}")
     rc, _, _, err = run("move", a, "--target", grid, "--row", 2, "--col", 3, fmt="table")
     check("move onto an occupied cell fails", rc != 0 and location(get(a)) == (grid, (1, 2)), err)
     rc, _, _, err = run("move", b, d, "--target", grid, "--row", 1, "--col", 1, fmt="table")
@@ -333,7 +322,8 @@ try:
             rc == 0 and got and got[0].read_text() == f.read_text(),
             f"{err} {got}",
         )
-    check("tags survive attachment upload", tags(get(a)) == ["t1", "t2"], tags(get(a)))
+    a_tags = tags(get(a))
+    check("tags survive attachment upload", a_tags == ["t1", "t2"], a_tags)
 
     # ------------------------------------------------------------------ delete
     e.section("delete")

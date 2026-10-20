@@ -84,16 +84,22 @@ def check_id_type(value: Union[str, int], expected: str) -> None:
     m = _GLOBAL_ID_RE.match(str(value).strip())
     if not m:
         return
-    actual = GLOBAL_ID_PREFIXES.get(m.group(1).upper(), "unknown")
     prefix = m.group(1).upper()
+    actual = resource_type(str(value).strip())
     if actual == "unknown":
         raise ValueError(f"'{value}' has an unknown GlobalID prefix '{prefix}'.")
     if actual not in _COMPATIBLE_TYPES.get(expected, {expected}):
-
-        def article(word: str) -> str:
-            return "an" if word[0] in "aeiou" else "a"
-
         raise ValueError(
-            f"'{value}' is {article(actual)} {actual} ID, not {article(expected)} {expected} ID "
+            f"'{value}' is {_article(actual)} {actual} ID, not {_article(expected)} {expected} ID "
             f"(prefix '{prefix}')."
         )
+
+
+def parse_typed_id(value: Union[str, int], expected: str) -> int:
+    """check_id_type() then parse_id(): the numeric ID of a GlobalID of type ``expected``."""
+    check_id_type(value, expected)
+    return parse_id(value)
+
+
+def _article(word: str) -> str:
+    return "an" if word[0] in "aeiou" else "a"

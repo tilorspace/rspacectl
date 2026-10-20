@@ -377,11 +377,13 @@ class TestMoveInstruments:
 class TestDeleteAndTag:
     def test_delete_instruments(self, app_context, mock_inv):
         delete.delete_instrument(["IN1", "2"])
-        assert [c.args[0] for c in mock_inv.delete_instrument.call_args_list] == [1, 2]
+        assert [c.args for c in mock_inv.doDelete.call_args_list] == [
+            ("instruments", 1), ("instruments", 2)
+        ]
 
     def test_delete_instrument_template(self, app_context, mock_inv):
         delete.delete_instrument_template(["NT3"])
-        mock_inv.delete_instrument_template.assert_called_once_with(3)
+        mock_inv.doDelete.assert_called_once_with("instrumentTemplates", 3)
 
     def test_delete_container_uses_relative_path(self, app_context, mock_inv):
         # doDelete prepends "/", so a leading slash produced //containers (404).

@@ -27,8 +27,9 @@ import tempfile
 import zlib
 from pathlib import Path
 
-from _e2e import field_values, setup, tags
+from _e2e import field_values, location, setup, tags
 
+from rspacectl.ids import parse_id
 from rspacectl.utils import place_instrument, put_inventory_item, set_item_image
 
 P = "rspacectl-review-e2e-mig-"
@@ -84,14 +85,8 @@ def has_image(rec):
     return any(link.get("rel") == "image" for link in (rec or {}).get("_links") or [])
 
 
-def location(rec):
-    parent = ((rec or {}).get("parentContainers") or [{}])[0].get("globalId")
-    loc = (rec or {}).get("parentLocation") or {}
-    return parent, (loc.get("coordY"), loc.get("coordX")) if loc.get("coordX") else None
-
-
 def markers(container_gid):
-    c = inv.get_container_by_id(int(container_gid[2:]), include_content=True)
+    c = inv.get_container_by_id(parse_id(container_gid), include_content=True)
     return sorted(((l["coordX"], l["coordY"]), l["id"]) for l in c.get("locations") or [])
 
 
@@ -120,7 +115,7 @@ try:
     template_ids.append(nt)
     run("tag", nt, "nt-src", fmt="table")
     with open(png(tmp / "icon.png", (30, 30, 200)), "rb") as f:
-        inv.set_instrument_template_icon(int(nt[2:]), f)
+        inv.set_instrument_template_icon(parse_id(nt), f)
     nt_rec = get(nt)
 
     c1 = gid_of(run("create", "container", "--name", P + "top", "--tag", "c1,c2"))
@@ -178,7 +173,7 @@ try:
     put_inventory_item(
         inv,
         "instruments",
-        int(a[2:]),
+        parse_id(a),
         {
             "extraFields": [
                 {"newFieldRequest": True, "name": "Room", "type": "text", "content": "B.204"}
@@ -188,7 +183,7 @@ try:
     put_inventory_item(
         inv,
         "instruments",
-        int(a[2:]),
+        parse_id(a),
         {
             "barcodes": [
                 {
@@ -207,7 +202,7 @@ try:
 
     b = gid_of(run("create", "instrument", "--name", P + "B", "--tag", "b1"))
     marker_coords, marker_ids = zip(*markers(img))
-    place_instrument(inv, int(b[2:]), int(img[2:]), location_id=marker_ids[1])
+    place_instrument(inv, parse_id(b), parse_id(img), location_id=marker_ids[1])
     c = gid_of(run("create", "instrument", "--name", P + "C", "--target", c1))
     d = gid_of(
         run(
@@ -364,7 +359,7 @@ try:
 
     check(
         "A': template, name and description",
-        na.get("templateId") == int(nt[2:])
+        na.get("templateId") == parse_id(nt)
         and na.get("name") == P + "A"
         and na.get("description") == "instrument A",
     )
@@ -427,7 +422,7 @@ try:
         tags(new[c1]) == ["c1", "c2"] and tags(new[grid]) == ["g1"],
         (tags(new[c1]), tags(new[grid])),
     )
-    grid_content = inv.get_container_by_id(int(m[grid][2:]), include_content=True)
+    grid_content = inv.get_container_by_id(parse_id(m[grid]), include_content=True)
     cells = sorted(
         ((l.get("content") or {}).get("type"), l["coordY"], l["coordX"])
         for l in grid_content.get("locations") or []
@@ -438,10 +433,11 @@ try:
         cells == [("INSTRUMENT", 1, 2), ("SUBSAMPLE", 2, 1)],
         cells,
     )
+    src_a = get(a)
     check(
         "source items untouched",
-        location(get(a)) == (grid, (1, 2))
-        and tags(get(a)) == ["a1", "a2"]
+        location(src_a) == (grid, (1, 2))
+        and tags(src_a) == ["a1", "a2"]
         and location(get(b))[0] == img,
     )
 

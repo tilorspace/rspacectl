@@ -6,7 +6,7 @@ from typing import Callable, List, Optional, Tuple, Type
 
 import typer
 
-from .ids import parse_id, resource_type
+from .ids import parse_typed_id, resource_type
 from .output import err_console
 
 
@@ -183,14 +183,16 @@ def get_container(inv, raw_id, include_content: bool = False) -> dict:
 
     GET /containers/{id} refuses workbenches with HTTP 422, so BE… IDs go to
     /workbenches/{id}; a plain numeric ID that turns out to be a workbench is
-    retried there. The client has no single-workbench getter.
+    retried there. The client has no single-workbench getter. Raises
+    ValueError for a GlobalID that is not a container or workbench.
     """
-    bench_id = parse_id(raw_id)
-    flag = "true" if include_content else "false"
+    item_id = parse_typed_id(raw_id, "container")
     if resource_type(str(raw_id)) != "bench":
         try:
-            return inv.get_container_by_id(bench_id, include_content=include_content)
+            return inv.get_container_by_id(item_id, include_content=include_content)
         except Exception as e:
-            if not str(raw_id).strip().isdigit() or "is a workbench" not in str(e):
+            numeric = str(raw_id).strip().isdigit()
+            if not numeric or getattr(e, "response_status_code", None) != 422:
                 raise
-    return inv.retrieve_api_results(f"/workbenches/{bench_id}?includeContent={flag}")
+    flag = "true" if include_content else "false"
+    return inv.retrieve_api_results(f"/workbenches/{item_id}?includeContent={flag}")

@@ -19,78 +19,26 @@ Usage (from the repo root, with rspacectl installed in the active env):
 Exits 0 when every check passes, 1 otherwise.
 """
 
-import argparse
 import json
-import os
-import shutil
-import subprocess
 import sys
-from pathlib import Path
-from urllib.parse import urlparse
 
-from rspacectl.config import load_config
+from _e2e import setup, tags
 
-LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 P = "rspacectl-review-e2e-"
 
-parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-parser.add_argument("--profile", default="default", help="rspacectl credential profile.")
-parser.add_argument(
-    "--rspace",
-    default=shutil.which("rspace") or str(Path(sys.executable).with_name("rspace")),
-    help="Path to the rspace executable (default: from PATH or this venv).",
-)
-opts = parser.parse_args()
-
-url, _ = load_config(profile=opts.profile)
-host = urlparse(url).hostname
-if host not in LOCAL_HOSTS:
-    sys.exit(f"Refusing to run against {url}: this script creates and deletes data. Local only.")
-RSPACE = [opts.rspace, "--profile", opts.profile]
-print(f"Running against {url} with {opts.rspace}")
-
-results = []
-created = {"sample": [], "container": [], "instrument": [], "document": [], "folder": []}
-
-
-def run(*args, fmt="json"):
-    p = subprocess.run(
-        [*RSPACE, "-o", fmt, *args],
-        capture_output=True,
-        check=False,
-        text=True,
-        env={**os.environ, "COLUMNS": "200"},
-    )
-    data = None
-    out = p.stdout
-    starts = [i for i in (out.find("{"), out.find("[")) if i >= 0]
-    if starts and fmt == "json":
-        try:
-            data = json.loads(out[min(starts) :])
-        except json.JSONDecodeError:
-            pass
-    err = " ".join(
-        l for l in p.stderr.splitlines() if "HTTP" not in l and "local development" not in l
-    )
-    return p.returncode, data, out, err
-
-
-def check(name, cond, detail=""):
-    results.append((name, bool(cond), detail))
-    print(("PASS " if cond else "FAIL ") + name + (f"  [{detail}]" if detail and not cond else ""))
-
-
-def tags(rec):
-    return sorted(t["value"] for t in rec.get("tags") or [])
+e = setup(__doc__.split("\n\n")[0])
+run, check, get = e.run, e.check, e.get
+# in deletion order
+created = {"instrument": [], "sample": [], "container": [], "document": [], "folder": []}
 
 
 def subsamples(sa):
-    return run("get", sa)[1]["subSamples"]
+    return (get(sa) or {}).get("subSamples") or []
 
 
 try:
     # ------------------------------------------------------------------ C6
-    print("\n== C6: create sample --expiry")
+    e.section("C6: create sample --expiry")
     rc, s, out, err = run(
         "create",
         "sample",
@@ -108,7 +56,7 @@ try:
     check("valid expiry exits 0", rc == 0, err)
     sa = s["globalId"]
     created["sample"].append(sa)
-    got = run("get", sa)[1]
+    got = get(sa)
     check(
         "server stored expiryDate 2027-01-02",
         got.get("expiryDate") == "2027-01-02",
@@ -123,11 +71,9 @@ try:
 
     rc, s, out, err = run("create", "sample", "--name", P + "exp-leap", "--expiry", "2028-02-29")
     created["sample"].append(s["globalId"])
-    check(
-        "leap-day expiry accepted", run("get", s["globalId"])[1].get("expiryDate") == "2028-02-29"
-    )
+    check("leap-day expiry accepted", get(s["globalId"]).get("expiryDate") == "2028-02-29")
 
-    before = run("search", P, fmt="quiet")[2].split()
+    before = e.find_named(P, "list", "samples", "-q", P)
     for bad in ["2027-13-01", "2027-02-30", "tomorrow", "02/01/2027", "2027-01-02T03:04:05", ""]:
         rc, _, _, err = run("create", "sample", "--name", P + "bad", "--expiry", bad)
         if bad == "":
@@ -139,16 +85,15 @@ try:
             rc == 1 and "expected a date as YYYY-MM-DD" in err,
             f"rc={rc} {err}",
         )
-    after = run("search", P, fmt="quiet")[2].split()
-    new = [g for g in after if g.startswith("SA") and g not in before]
+    new = [g for g in e.find_named(P, "list", "samples", "-q", P) if g not in before]
     created["sample"].extend(new)
     check("invalid expiries created nothing (only the empty-string one)", len(new) == 1, new)
 
     # ------------------------------------------------------------------ C5
-    print("\n== C5: split")
+    e.section("C5: split")
     ss = subsamples(sa)[0]["globalId"]
     run("tag", ss, "sst,keep", fmt="table")
-    check("subsample tagged", tags(run("get", ss)[1]) == ["keep", "sst"])
+    check("subsample tagged", tags(get(ss)) == ["keep", "sst"])
 
     n_before = len(subsamples(sa))
     rc, _, _, err = run("split", sa, "--count", "2", "--quantity", "0.1")
@@ -183,15 +128,15 @@ try:
     )
     check(
         "tags preserved on all subsamples (server state)",
-        all(tags(run("get", x["globalId"])[1]) == ["keep", "sst"] for x in subs),
+        all(tags(get(x["globalId"])) == ["keep", "sst"] for x in subs),
     )
-    check("parent sample tags untouched", tags(run("get", sa)[1]) == ["t1", "t2"])
+    check("parent sample tags untouched", tags(get(sa)) == ["t1", "t2"])
 
     # even split, lowercase prefix: server rescales ml -> µl
     target = next(g for g in qty if g != ss)
     rc, data, out, err = run("split", target.lower(), "--count", "1")
     check("even split with lowercase 'ss' exits 0", rc == 0, err)
-    t = run("get", target)[1]
+    t = get(target)
     check(
         "even split rescales 0.25 ml to 125 µl (unit caveat)",
         t["quantity"] == {"numericValue": 125, "unitId": 2},
@@ -224,7 +169,7 @@ try:
     check("split --help documents unit rescaling", "rescale" in help_out)
 
     # ------------------------------------------------------------------ C4 setup
-    print("\n== C4: setup")
+    e.section("C4: setup")
     ic = run("create", "container", "--name", P + "box", "--tag", "c1")[1]["globalId"]
     created["container"].append(ic)
     inst = run("create", "instrument", "--name", P + "scope", "--tag", "i1")[1]
@@ -242,7 +187,7 @@ try:
     print(f"   using {sa} {ss} {ic} {be} {inst['globalId']} {doc} {fl} {nb} {it} {nt} {fm}")
 
     # ------------------------------------------------------------------ C4 get
-    print("\n== C4: get <type> <id>")
+    e.section("C4: get <type> <id>")
     matching = [
         ("sample", sa),
         ("subsample", ss),
@@ -309,7 +254,7 @@ try:
     check("single-arg get still infers type", data and data["globalId"] == sa)
 
     # ------------------------------------------------------------------ C4 delete
-    print("\n== C4: delete <type> <ids>")
+    e.section("C4: delete <type> <ids>")
     victims = [
         ("sample", ss, sa),
         ("sample", ic, ic),
@@ -323,7 +268,7 @@ try:
     ]
     for typ, gid, still_there in victims:
         rc, _, _, err = run("delete", typ, gid, fmt="table")
-        alive = run("get", still_there)[1]
+        alive = get(still_there)
         check(
             f"delete {typ} {gid} refused, {still_there} survives",
             rc == 1 and "Nothing was deleted" in err and alive and not alive.get("deleted"),
@@ -340,7 +285,7 @@ try:
     check(f"{doc2} is gone after delete", rc != 0 or (gone or {}).get("deleted"))
 
     rc, _, _, err = run("delete", "sample", s2["globalId"], ic, fmt="table")
-    alive = run("get", s2["globalId"])[1]
+    alive = get(s2["globalId"])
     check(
         "mixed batch (valid SA + IC) deletes nothing",
         rc == 1 and alive and not alive.get("deleted"),
@@ -348,26 +293,12 @@ try:
     )
 
 finally:
-    print("\n== cleanup (also exercises valid deletes)")
-    for typ, ids in [
-        ("instrument", created["instrument"]),
-        ("sample", created["sample"]),
-        ("container", created["container"]),
-        ("document", created["document"]),
-        ("folder", created["folder"]),
-    ]:
+    e.section("cleanup (also exercises valid deletes)")
+    for typ, ids in created.items():
         if ids:
             rc, _, out, err = run("delete", typ, *ids, fmt="table")
             check(f"delete {typ} {' '.join(ids)}", rc == 0, f"{out.strip()} {err}")
-    left = []
-    for gid in run("search", P, fmt="quiet")[2].split():
-        rec = run("get", gid)[1] or {}
-        if (rec.get("name") or "").startswith(P) and not rec.get("deleted"):
-            left.append(gid)
+    left = e.find_named(P, "search", P)
     check("nothing named " + P + "* left after cleanup", not left, left)
 
-failed = [r for r in results if not r[1]]
-print(f"\n{len(results) - len(failed)}/{len(results)} passed")
-for name, _, detail in failed:
-    print(f"  FAIL {name}: {detail}")
-sys.exit(1 if failed else 0)
+sys.exit(e.report())

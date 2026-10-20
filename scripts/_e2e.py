@@ -117,6 +117,13 @@ def field_values(rec):
     return out
 
 
+def location(rec):
+    """(parent GlobalID, (row, col) or None) of a placeable item."""
+    parent = ((rec or {}).get("parentContainers") or [{}])[0].get("globalId")
+    loc = (rec or {}).get("parentLocation") or {}
+    return parent, (loc.get("coordY"), loc.get("coordX")) if loc.get("coordX") else None
+
+
 def setup(description: str) -> E2E:
     """Parse --profile/--rspace, refuse non-local servers, return an E2E runner."""
     parser = argparse.ArgumentParser(description=description)
