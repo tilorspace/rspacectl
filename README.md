@@ -1,5 +1,7 @@
 # rspacectl
 
+[![CI](https://github.com/tilorspace/rspacectl/actions/workflows/ci.yml/badge.svg)](https://github.com/tilorspace/rspacectl/actions/workflows/ci.yml)
+
 A command-line interface for [RSpace](https://www.researchspace.com/) covering both the electronic lab notebook and the inventory system. Built on the [rspace-client Python SDK](https://github.com/rspace-os/rspace-client-python).
 
 > **Status:** Alpha — not yet published to PyPI. Install locally using the instructions below.
@@ -535,4 +537,6 @@ poetry run python scripts/e2e_migrate_instruments.py [--profile NAME]
 poetry run ruff format .
 poetry run ruff check .
 ```
+
+CI runs on every pull request and on pushes to `main`: the tests on Python 3.11 to 3.14, `ruff check` and `ruff format --check`, and a build check (`python -m build` plus `twine check`). The e2e scripts need a live RSpace, so they don't run in CI; run them by hand before a release.
 
