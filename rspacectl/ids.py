@@ -53,7 +53,7 @@ def parse_id(value: Union[str, int]) -> int:
         raise ValueError(
             f"'{value}' is not a valid RSpace ID. "
             f"Expected a number or GlobalID (e.g. SD123, SA456)."
-        )
+        ) from None
 
 
 def resource_type(global_id: str) -> str:

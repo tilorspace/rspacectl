@@ -6,32 +6,32 @@ import typer
 from rich.console import Console
 
 from . import __version__
-from .config import DEFAULT_PROFILE, ConfigError, load_config
-from .context import AppContext, set_context
-from .output import OutputFormat
 
 # ---------------------------------------------------------------------------
 # Sub-app imports — each command module registers itself here
 # ---------------------------------------------------------------------------
 from .commands import (
     configure,
-    status,
-    search,
-    list_cmd,
-    get_cmd,
     create,
-    update,
     delete,
-    upload,
     download,
-    move,
-    split,
-    share,
     export,
+    get_cmd,
     import_cmd,
+    list_cmd,
     migrate,
+    move,
+    search,
+    share,
+    split,
+    status,
     tag,
+    update,
+    upload,
 )
+from .config import DEFAULT_PROFILE, ConfigError, load_config
+from .context import AppContext, set_context
+from .output import OutputFormat
 
 console = Console()
 
@@ -54,7 +54,9 @@ app.add_typer(delete.app, name="delete", help="Delete one or more resources")
 app.add_typer(upload.app, name="upload", help="Upload files or attachments")
 app.add_typer(download.app, name="download", help="Download files or attachments")
 app.add_typer(import_cmd.app, name="import", help="Import data into RSpace")
-app.add_typer(migrate.app, name="migrate", help="Export/import full inventory snapshots for server migration")
+app.add_typer(
+    migrate.app, name="migrate", help="Export/import full inventory snapshots for server migration"
+)
 
 app.command("configure")(configure.configure)
 app.command("status")(status.status)
@@ -129,7 +131,7 @@ def root_callback(
         resolved_url, resolved_key = load_config(url, api_key, profile=profile)
     except ConfigError as e:
         console.print(f"[bold red]Configuration error:[/bold red] {e}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     from rspace_client import ELNClient, InventoryClient
 

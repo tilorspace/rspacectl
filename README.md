@@ -19,7 +19,7 @@ A command-line interface for [RSpace](https://www.researchspace.com/) covering b
 
 ## Requirements
 
-- Python 3.9 or later
+- Python 3.11 or later
 - [Poetry](https://python-poetry.org/) (for local installation)
 
 ## Local installation
@@ -532,7 +532,7 @@ poetry run python scripts/e2e_instruments.py [--profile NAME]
 poetry run python scripts/e2e_migrate_instruments.py [--profile NAME]
 
 # Format and lint
-poetry run black rspacectl tests
-poetry run ruff check rspacectl tests
+poetry run ruff format .
+poetry run ruff check .
 ```
 

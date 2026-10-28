@@ -2,7 +2,6 @@
 
 import csv as csv_module
 import datetime
-import json
 from pathlib import Path
 from typing import List, Optional
 
@@ -22,7 +21,6 @@ from ..output import (
     ColumnDef,
     console,
     err_console,
-    print_result,
     print_single,
 )
 from ..utils import instrument_location, load_json_file, parse_tags
@@ -111,7 +109,9 @@ def _parse_fields(field_args: List[str]) -> dict:
     parsed = {}
     for arg in field_args:
         if "=" not in arg:
-            err_console.print(f"[red]Invalid --field format (expected NAME=VALUE):[/red] {escape(arg)}")
+            err_console.print(
+                f"[red]Invalid --field format (expected NAME=VALUE):[/red] {escape(arg)}"
+            )
             raise typer.Exit(1)
         name, _, value = arg.partition("=")
         parsed[name.strip()] = value.strip()
@@ -147,7 +147,9 @@ def _validate_mandatory_fields(template_fields: list, field_values: dict) -> Non
     known = {f.get("name") for f in template_fields}
     unknown = [k for k in field_values if k not in known]
     for u in unknown:
-        warn(f"Unknown field name ignored: '{escape(u)}' (use 'rspace get <template-id>' to see valid names)")
+        warn(
+            f"Unknown field name ignored: '{escape(u)}' (use 'rspace get <template-id>' to see valid names)"
+        )
 
     missing = [
         f["name"]
@@ -157,7 +159,7 @@ def _validate_mandatory_fields(template_fields: list, field_values: dict) -> Non
     if missing:
         err_console.print("[red]Missing mandatory template fields:[/red]")
         for m in missing:
-            err_console.print(f"  --field \"{escape(m)}=<value>\"")
+            err_console.print(f'  --field "{escape(m)}=<value>"')
         raise typer.Exit(1)
 
 
@@ -230,9 +232,7 @@ def create_sample(
 
     try:
         total_quantity = (
-            Quantity(quantity, {"id": unit})
-            if quantity is not None and unit is not None
-            else None
+            Quantity(quantity, {"id": unit}) if quantity is not None and unit is not None else None
         )
 
         result = ctx.inv.create_sample(
@@ -267,7 +267,7 @@ def _bulk_create_from_csv(ctx, csv_path: Path, columns: list) -> None:
                 posts.append(SamplePost(name=name))
     except FileNotFoundError:
         err_console.print(f"[red]File not found:[/red] {csv_path}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     if not posts:
         err_console.print("[red]No valid rows found in CSV.[/red]")
@@ -406,9 +406,7 @@ def create_instrument(
 
     try:
         # The client's create_instrument has no location parameter; POST directly.
-        result = ctx.inv.retrieve_api_results(
-            "/instruments", request_type="POST", params=post.data
-        )
+        result = ctx.inv.retrieve_api_results("/instruments", request_type="POST", params=post.data)
     except Exception as e:
         handle_api_error(e)
         return  # handle_api_error always exits, but be explicit

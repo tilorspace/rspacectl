@@ -1,12 +1,12 @@
 """rspace download — download gallery files or inventory attachments."""
 
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import typer
 
 from ..context import get_context
-from ..exceptions import handle_api_error, warn
+from ..exceptions import warn
 from ..ids import parse_id
 from ..output import console, err_console
 

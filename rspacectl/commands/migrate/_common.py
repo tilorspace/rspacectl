@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from rich.progress import (
     BarColumn,
@@ -26,7 +26,6 @@ from rspace_client.inv.inv import Pagination
 
 from ...exceptions import warn
 from ...output import err_console
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -153,9 +152,7 @@ def _record_error(state: _ImportState, message: str) -> None:
     state.errors.append(message)
 
 
-def _resolve_new_gid(
-    old_gid: str, state: _ImportState, kind: str
-) -> Optional[str]:
+def _resolve_new_gid(old_gid: str, state: _ImportState, kind: str) -> Optional[str]:
     """Return the new globalId for an old one, or None if unmapped.
 
     Records a state error on miss.  In dry-run mode the caller normally
@@ -284,7 +281,7 @@ def _preview_image_hash(url: str) -> Optional[str]:
     idx = url.find(marker)
     if idx == -1:
         return None
-    candidate = url[idx + len(marker):].split("?", 1)[0].split("/", 1)[0]
+    candidate = url[idx + len(marker) :].split("?", 1)[0].split("/", 1)[0]
     return candidate or None
 
 
@@ -309,11 +306,7 @@ def _all_items_with_globalid(
         [(t["globalId"], t) for t in templates]
         + [(c["globalId"], c) for c in containers]
         + [(s["globalId"], s) for s in samples]
-        + [
-            (ss["globalId"], ss)
-            for s in samples
-            for ss in s.get("subSamples", [])
-        ]
+        + [(ss["globalId"], ss) for s in samples for ss in s.get("subSamples", [])]
         + [(t["globalId"], t) for t in instrument_templates or []]
         + [(i["globalId"], i) for i in instruments or []]
     )

@@ -83,7 +83,7 @@ def import_tree(
         )
     except NotADirectoryError:
         err_console.print(f"[red]Not a directory:[/red] {directory}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except Exception as e:
         handle_api_error(e)
 

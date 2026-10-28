@@ -87,7 +87,7 @@ def has_image(rec):
 
 def markers(container_gid):
     c = inv.get_container_by_id(parse_id(container_gid), include_content=True)
-    return sorted(((l["coordX"], l["coordY"]), l["id"]) for l in c.get("locations") or [])
+    return sorted(((loc["coordX"], loc["coordY"]), loc["id"]) for loc in c.get("locations") or [])
 
 
 def migrate_import(snapshot, *flags):
@@ -201,7 +201,7 @@ try:
         set_item_image(inv, a, f)
 
     b = gid_of(run("create", "instrument", "--name", P + "B", "--tag", "b1"))
-    marker_coords, marker_ids = zip(*markers(img))
+    marker_coords, marker_ids = zip(*markers(img), strict=False)
     place_instrument(inv, parse_id(b), parse_id(img), location_id=marker_ids[1])
     c = gid_of(run("create", "instrument", "--name", P + "C", "--target", c1))
     d = gid_of(
@@ -424,9 +424,9 @@ try:
     )
     grid_content = inv.get_container_by_id(parse_id(m[grid]), include_content=True)
     cells = sorted(
-        ((l.get("content") or {}).get("type"), l["coordY"], l["coordX"])
-        for l in grid_content.get("locations") or []
-        if l.get("content")
+        ((loc.get("content") or {}).get("type"), loc["coordY"], loc["coordX"])
+        for loc in grid_content.get("locations") or []
+        if loc.get("content")
     )
     check(
         "new grid holds the instrument (1,2) and the subsample (2,1)",

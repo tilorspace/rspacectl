@@ -429,7 +429,7 @@ def get(
     handler = _DISPATCH.get(rtype)
     if handler is None:
         typer.echo(
-            f"Unknown resource type '{rtype}'. " f"Valid types: {', '.join(sorted(_DISPATCH))}.",
+            f"Unknown resource type '{rtype}'. Valid types: {', '.join(sorted(_DISPATCH))}.",
             err=True,
         )
         raise typer.Exit(1)

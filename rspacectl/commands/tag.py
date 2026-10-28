@@ -46,8 +46,7 @@ def tag(
         if rtype in _ELN_TYPES:
             result = ctx.eln.update_document(document_id=numeric_id, tags=tags)
             console.print(
-                f"[green]Tagged {rtype}[/green] {result.get('globalId')}: "
-                f"{result.get('tags', '')}"
+                f"[green]Tagged {rtype}[/green] {result.get('globalId')}: {result.get('tags', '')}"
             )
         elif rtype in _INV_ENDPOINTS:
             endpoint = _INV_ENDPOINTS[rtype]

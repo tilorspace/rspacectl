@@ -23,7 +23,6 @@ from ..output import (
     COL_NAME_40,
     COL_OWNER,
     ColumnDef,
-    err_console,
     print_page_info,
     print_result,
 )

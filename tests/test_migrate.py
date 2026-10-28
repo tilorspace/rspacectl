@@ -6,20 +6,18 @@ the full export→import round-trip on a fixture blob.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
 from rspacectl.commands import migrate
 from rspacectl.commands.migrate import (
-    _ImportState,
     _build_tmpl_field_name_map,
     _collect_subsample_locations,
     _creation_fields_from_state,
     _field_updates_by_name,
     _find_link,
+    _ImportState,
     _paginate,
     _preview_image_hash,
     _preview_image_url,
@@ -27,7 +25,6 @@ from rspacectl.commands.migrate import (
     _sanitise_template,
     _strip,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -401,7 +398,9 @@ class TestImportContainersFlat:
             "id": 200,
             "globalId": "IC200",
         }
-        migrate._import_containers_flat(mock_inv, [c], empty_state, dry_run=False, snapshot_dir=tmp_path)
+        migrate._import_containers_flat(
+            mock_inv, [c], empty_state, dry_run=False, snapshot_dir=tmp_path
+        )
         assert empty_state.id_map["IC100"] == "IC200"
         mock_inv.create_list_container.assert_called_once()
 
@@ -414,7 +413,9 @@ class TestImportContainersFlat:
             "gridLayout": {"rowsNumber": 8, "columnsNumber": 12},
         }
         mock_inv.create_grid_container.return_value = {"id": 200, "globalId": "IC200"}
-        migrate._import_containers_flat(mock_inv, [c], empty_state, dry_run=False, snapshot_dir=tmp_path)
+        migrate._import_containers_flat(
+            mock_inv, [c], empty_state, dry_run=False, snapshot_dir=tmp_path
+        )
         kwargs = mock_inv.create_grid_container.call_args.kwargs
         assert kwargs["row_count"] == 8
         assert kwargs["column_count"] == 12
@@ -425,7 +426,9 @@ class TestImportContainersFlat:
         # No image_containers/ dir present — falls back to LIST.
         c = {"id": 100, "globalId": "IC100", "name": "Map", "cType": "IMAGE"}
         mock_inv.create_list_container.return_value = {"id": 200, "globalId": "IC200"}
-        migrate._import_containers_flat(mock_inv, [c], empty_state, dry_run=False, snapshot_dir=tmp_path)
+        migrate._import_containers_flat(
+            mock_inv, [c], empty_state, dry_run=False, snapshot_dir=tmp_path
+        )
         mock_inv.create_list_container.assert_called_once()
         mock_inv.create_image_container.assert_not_called()
 
@@ -704,12 +707,23 @@ def _make_target_inv():
         counter["next"] += 1
         return {"id": n, "globalId": f"NEW{n}", "name": name, "fields": [], "subSamples": []}
 
-    inv.create_list_container.side_effect = lambda **kw: {"id": 500 + counter["next"], "globalId": f"IC{500 + counter['next']}", "name": kw.get("name")}
+    inv.create_list_container.side_effect = lambda **kw: {
+        "id": 500 + counter["next"],
+        "globalId": f"IC{500 + counter['next']}",
+        "name": kw.get("name"),
+    }
 
     def fake_create_template(sample_template_post=None, **kw):
         n = counter["next"]
         counter["next"] += 1
-        return {"id": n, "globalId": f"IT{n}", "fields": [{"id": n + 1, "name": f["name"]} for f in (sample_template_post or {}).get("fields", [])]}
+        return {
+            "id": n,
+            "globalId": f"IT{n}",
+            "fields": [
+                {"id": n + 1, "name": f["name"]}
+                for f in (sample_template_post or {}).get("fields", [])
+            ],
+        }
 
     def fake_create_sample(name=None, subsample_count=1, **kw):
         n = counter["next"]
@@ -720,8 +734,7 @@ def _make_target_inv():
             "name": name,
             "fields": [],
             "subSamples": [
-                {"id": n + i + 1, "globalId": f"SS{n + i + 1}"}
-                for i in range(subsample_count)
+                {"id": n + i + 1, "globalId": f"SS{n + i + 1}"} for i in range(subsample_count)
             ],
         }
 
@@ -783,7 +796,9 @@ class TestEndToEndImport:
         ]
 
         migrate._import_templates(inv, templates, state, dry_run=False)
-        migrate._import_containers_flat(inv, containers, state, dry_run=False, snapshot_dir=tmp_path)
+        migrate._import_containers_flat(
+            inv, containers, state, dry_run=False, snapshot_dir=tmp_path
+        )
         migrate._import_container_hierarchy(inv, containers, state, dry_run=False)
         migrate._import_samples(inv, samples, state, dry_run=False, templates=templates)
         migrate._import_subsample_placements(inv, samples, state, dry_run=False)

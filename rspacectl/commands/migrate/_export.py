@@ -37,7 +37,6 @@ from ._common import (
     _snapshot_json,
 )
 
-
 # ---------------------------------------------------------------------------
 # Export — file download helpers
 # ---------------------------------------------------------------------------
@@ -63,9 +62,13 @@ def _export_attachments(inv, item: Dict, item_dir: Path) -> List[Dict]:
         dest = item_dir / local_name
         try:
             inv.download_attachment_by_id(att_id, str(dest))
-            meta.append({"globalId": att.get("globalId"), "filename": filename, "local": local_name})
+            meta.append(
+                {"globalId": att.get("globalId"), "filename": filename, "local": local_name}
+            )
         except Exception as exc:
-            _export_warn(f"Could not download attachment {att.get('globalId')} for {item.get('globalId')}: {exc}")
+            _export_warn(
+                f"Could not download attachment {att.get('globalId')} for {item.get('globalId')}: {exc}"
+            )
     return meta
 
 
@@ -175,9 +178,7 @@ def _export_template_icon(inv, tmpl: Dict, icons_dir: Path) -> Optional[str]:
     dest = icons_dir / local_name
     icons_dir.mkdir(parents=True, exist_ok=True)
     get_icon = (
-        inv.get_instrument_template_icon
-        if gid.startswith("NT")
-        else inv.get_sample_template_icon
+        inv.get_instrument_template_icon if gid.startswith("NT") else inv.get_sample_template_icon
     )
     try:
         get_icon(tmpl_id, icon_id, str(dest))
@@ -209,7 +210,9 @@ def _export_image_container(inv, container: Dict, ic_dir: Path) -> Dict:
                 inv.download_link_to_file(href, str(dest))
                 result["background_local"] = local_name
             except Exception as exc:
-                _export_warn(f"Could not download background image for IMAGE container {gid}: {exc}")
+                _export_warn(
+                    f"Could not download background image for IMAGE container {gid}: {exc}"
+                )
             break
 
     if "background_local" not in result:
@@ -341,7 +344,7 @@ def _walk_container(
         # storedContainers / content.content are legacy fallback fields from older
         # API versions. Items here may lack a numeric 'id' and carry no grid
         # position; we synthesise id from globalId if needed.
-        for item in (full.get("storedContainers") or []):
+        for item in full.get("storedContainers") or []:
             if not item.get("id") and item.get("globalId"):
                 item = dict(item, id=parse_id(item["globalId"]))
             children_with_pos.append((item, None, None))
@@ -359,7 +362,10 @@ def _walk_container(
     for child, col, row in children_with_pos:
         collected.extend(
             _walk_container(
-                inv, child, depth + 1, full["globalId"],
+                inv,
+                child,
+                depth + 1,
+                full["globalId"],
                 parent_grid_col=col if is_grid else None,
                 parent_grid_row=row if is_grid else None,
                 found_sample_ids=found_sample_ids,
@@ -397,19 +403,18 @@ def _export_containers(
         err_console.print(f"  Walking tree from {root.get('globalId')} ({root.get('name')})…")
         containers.extend(
             _walk_container(
-                inv, root, depth=0, parent_global_id=None,
+                inv,
+                root,
+                depth=0,
+                parent_global_id=None,
                 found_sample_ids=found_sample_ids if collect_samples else None,
                 found_instrument_ids=found_instrument_ids if collect_samples else None,
             )
         )
 
     for c in containers:
-        has_attachment = (
-            bool(c.get("attachments") or c.get("storedFiles"))
-            or any(
-                ef.get("type") in _ATTACHMENT_FIELD_TYPES
-                for ef in (c.get("extraFields") or [])
-            )
+        has_attachment = bool(c.get("attachments") or c.get("storedFiles")) or any(
+            ef.get("type") in _ATTACHMENT_FIELD_TYPES for ef in (c.get("extraFields") or [])
         )
         if has_attachment:
             container_attachment_count += 1
@@ -493,10 +498,7 @@ def _export_samples(
         # The API may return the template reference as sampleTemplate.globalId,
         # templateGlobalId, or just a numeric templateId — handle all three.
         tmpl_ref = full.get("sampleTemplate") or {}
-        tmpl_gid = (
-            tmpl_ref.get("globalId")
-            or full.get("templateGlobalId")
-        )
+        tmpl_gid = tmpl_ref.get("globalId") or full.get("templateGlobalId")
         if not tmpl_gid and full.get("templateId"):
             tmpl_gid = f"IT{full['templateId']}"
         if tmpl_gid:
@@ -508,14 +510,12 @@ def _export_samples(
         # Warn about attachments and attachment-type extraFields (not migrated in this version)
         for ss in full.get("subSamples", []):
             has_attachment = bool(ss.get("attachments") or ss.get("storedFiles")) or any(
-                ef.get("type") in _ATTACHMENT_FIELD_TYPES
-                for ef in (ss.get("extraFields") or [])
+                ef.get("type") in _ATTACHMENT_FIELD_TYPES for ef in (ss.get("extraFields") or [])
             )
             if has_attachment:
                 attachment_count += 1
         has_sample_attachment = bool(full.get("attachments") or full.get("storedFiles")) or any(
-            ef.get("type") in _ATTACHMENT_FIELD_TYPES
-            for ef in (full.get("extraFields") or [])
+            ef.get("type") in _ATTACHMENT_FIELD_TYPES for ef in (full.get("extraFields") or [])
         )
         if has_sample_attachment:
             attachment_count += 1
@@ -598,8 +598,7 @@ def _enrich_image_marker_indices(
     for c in containers:
         if c.get("cType") == "IMAGE":
             container_markers[c["globalId"]] = [
-                (loc.get("coordX"), loc.get("coordY"))
-                for loc in c.get("locations") or []
+                (loc.get("coordX"), loc.get("coordY")) for loc in c.get("locations") or []
             ]
 
     placements = [
@@ -676,8 +675,12 @@ def _export_files(
     # drive the progress bar so users see how far through file downloads we are.
     n_subsamples = sum(len(s.get("subSamples", [])) for s in samples)
     total_items = (
-        len(templates) + len(containers) + len(samples) + n_subsamples
-        + len(instrument_templates) + len(instruments)
+        len(templates)
+        + len(containers)
+        + len(samples)
+        + n_subsamples
+        + len(instrument_templates)
+        + len(instruments)
     )
 
     with _progress() as prog:
@@ -835,7 +838,14 @@ def migrate_export(
       rspace migrate export --all --output data_only/ --no-files
     """
     if not any(
-        [all_resources, template_ids, container_ids, sample_ids, instrument_template_ids, instrument_ids]
+        [
+            all_resources,
+            template_ids,
+            container_ids,
+            sample_ids,
+            instrument_template_ids,
+            instrument_ids,
+        ]
     ):
         err_console.print(
             "[red]Specify --all, or at least one of --template / --container / --sample / "
@@ -873,17 +883,13 @@ def migrate_export(
     # Only explicitly selected templates here; templates referenced by the
     # exported samples are auto-included below.
     if all_resources or template_ids:
-        t_ids = (
-            [parse_id(t) for t in template_ids]
-            if template_ids and not all_resources
-            else None
-        )
+        t_ids = [parse_id(t) for t in template_ids] if template_ids and not all_resources else None
         err_console.print("[bold]Exporting templates…[/bold]")
         try:
             blob["templates"] = _export_templates(inv, ids=t_ids)
         except Exception as exc:
             err_console.print(f"[red]Export failed (templates): {exc}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         console.print(f"  Collected [green]{len(blob['templates'])}[/green] template(s).")
 
     # ---- Containers ------------------------------------------------------
@@ -891,9 +897,7 @@ def migrate_export(
     container_found_instrument_ids: Set[int] = set()
     if all_resources or container_ids:
         c_ids = (
-            [parse_id(c) for c in container_ids]
-            if container_ids and not all_resources
-            else None
+            [parse_id(c) for c in container_ids] if container_ids and not all_resources else None
         )
         err_console.print("[bold]Exporting containers…[/bold]")
         try:
@@ -904,7 +908,7 @@ def migrate_export(
             ) = _export_containers(inv, ids=c_ids, warn_attachments=no_files)
         except Exception as exc:
             err_console.print(f"[red]Export failed (containers): {exc}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         console.print(f"  Collected [green]{len(blob['containers'])}[/green] container(s).")
         if container_found_sample_ids:
             err_console.print(
@@ -926,9 +930,7 @@ def migrate_export(
         all_numeric = container_found_sample_ids | explicit_numeric
         effective_sample_ids = [str(sid) for sid in all_numeric]
         if not sample_ids:
-            err_console.print(
-                "[bold]Exporting samples found in containers…[/bold]"
-            )
+            err_console.print("[bold]Exporting samples found in containers…[/bold]")
 
     if all_resources or effective_sample_ids:
         s_ids = (
@@ -954,7 +956,7 @@ def migrate_export(
                     blob["templates"].extend(_export_templates(inv, ids=missing_ids))
         except Exception as exc:
             err_console.print(f"[red]Export failed (samples): {exc}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         console.print(f"  Collected [green]{len(blob['samples'])}[/green] sample(s).")
 
     # ---- Instrument templates --------------------------------------------
@@ -970,7 +972,7 @@ def migrate_export(
             blob["instrument_templates"] = _export_instrument_templates(inv, ids=nt_ids)
         except Exception as exc:
             err_console.print(f"[red]Export failed (instrument templates): {exc}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         console.print(
             f"  Collected [green]{len(blob['instrument_templates'])}[/green] instrument template(s)."
         )
@@ -999,7 +1001,7 @@ def migrate_export(
                     )
         except Exception as exc:
             err_console.print(f"[red]Export failed (instruments): {exc}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         console.print(f"  Collected [green]{len(blob['instruments'])}[/green] instrument(s).")
 
     # ---- Cross-reference IMAGE marker indices ----------------------------
@@ -1040,19 +1042,17 @@ def migrate_export(
         )
     ]
     n_attachments = sum(
-        len((item.get("_migration") or {}).get("attachments") or [])
-        for item in all_items
+        len((item.get("_migration") or {}).get("attachments") or []) for item in all_items
     )
-    n_images = sum(
-        1 for item in all_items if (item.get("_migration") or {}).get("preview_local")
-    )
+    n_images = sum(1 for item in all_items if (item.get("_migration") or {}).get("preview_local"))
     n_icons = sum(
         1
         for t in blob["templates"] + blob["instrument_templates"]
         if (t.get("_migration") or {}).get("icon_local")
     )
     n_ic_backgrounds = sum(
-        1 for c in blob["containers"]
+        1
+        for c in blob["containers"]
         if (c.get("_migration") or {}).get("image_container", {}).get("background_local")
     )
 
@@ -1080,7 +1080,4 @@ def migrate_export(
             console.print("  [dim]No files exported.[/dim]")
 
     if _export_warnings:
-        console.print(
-            f"  [yellow]Warnings: {len(_export_warnings)}[/yellow] "
-            "(see messages above)"
-        )
+        console.print(f"  [yellow]Warnings: {len(_export_warnings)}[/yellow] (see messages above)")

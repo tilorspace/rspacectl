@@ -3,7 +3,6 @@
 from typing import List
 
 import typer
-from rich.console import Console
 
 from ..context import get_context
 from ..exceptions import exit_with_error

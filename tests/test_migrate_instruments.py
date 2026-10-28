@@ -38,11 +38,22 @@ class TestItemLocation:
 
 class TestPreviewImageUrl:
     def test_default_icon_is_not_an_image(self):
-        item = {"_links": [{"rel": "image", "link": "http://x/api/inventory/v1/instrumentTemplates/5/icon/-1"}]}
+        item = {
+            "_links": [
+                {"rel": "image", "link": "http://x/api/inventory/v1/instrumentTemplates/5/icon/-1"}
+            ]
+        }
         assert migrate._preview_image_url(item) is None
 
     def test_template_icon_placeholder_is_not_an_image(self):
-        item = {"_links": [{"rel": "image", "link": "http://x/api/inventory/v1/instrumentTemplates/377/icon/28"}]}
+        item = {
+            "_links": [
+                {
+                    "rel": "image",
+                    "link": "http://x/api/inventory/v1/instrumentTemplates/377/icon/28",
+                }
+            ]
+        }
         assert migrate._preview_image_url(item) is None
 
     def test_custom_image_kept(self):
@@ -53,14 +64,19 @@ class TestPreviewImageUrl:
 class TestTemplateIcon:
     def test_instrument_template_uses_instrument_icon_endpoint(self, tmp_path):
         inv = MagicMock()
-        name = migrate._export_template_icon(inv, {"id": 3, "globalId": "NT3", "iconId": 27}, tmp_path)
+        name = migrate._export_template_icon(
+            inv, {"id": 3, "globalId": "NT3", "iconId": 27}, tmp_path
+        )
         assert name == "NT3_icon"
         inv.get_instrument_template_icon.assert_called_once_with(3, 27, str(tmp_path / "NT3_icon"))
         inv.get_sample_template_icon.assert_not_called()
 
     def test_default_icon_id_skipped(self, tmp_path):
         inv = MagicMock()
-        assert migrate._export_template_icon(inv, {"id": 3, "globalId": "NT3", "iconId": -1}, tmp_path) is None
+        assert (
+            migrate._export_template_icon(inv, {"id": 3, "globalId": "NT3", "iconId": -1}, tmp_path)
+            is None
+        )
         inv.get_instrument_template_icon.assert_not_called()
 
 
@@ -98,14 +114,23 @@ class TestExportInstruments:
         assert instruments[0]["_migration"]["location"]["grid_row"] == 2
 
     def test_marker_index_for_instrument_in_image_container(self):
-        containers = [{
-            "globalId": "IC7",
-            "cType": "IMAGE",
-            "locations": [{"coordX": 10, "coordY": 10}, {"coordX": 50, "coordY": 60}],
-        }]
-        inst = {"_migration": {"location": {
-            "container_global_id": "IC7", "parent_ctype": "IMAGE", "grid_col": 50, "grid_row": 60,
-        }}}
+        containers = [
+            {
+                "globalId": "IC7",
+                "cType": "IMAGE",
+                "locations": [{"coordX": 10, "coordY": 10}, {"coordX": 50, "coordY": 60}],
+            }
+        ]
+        inst = {
+            "_migration": {
+                "location": {
+                    "container_global_id": "IC7",
+                    "parent_ctype": "IMAGE",
+                    "grid_col": 50,
+                    "grid_row": 60,
+                }
+            }
+        }
         migrate._enrich_image_marker_indices(containers, [], [inst])
         assert inst["_migration"]["location"]["marker_index"] == 1
 
@@ -118,19 +143,33 @@ class TestMigrateExportCommand:
         mock_inv.get_sample_by_id.return_value = {"globalId": "SA2", "id": 2, "templateId": 4}
         mock_inv.get_sample_template_by_id.side_effect = lambda i: {"globalId": f"IT{i}", "id": i}
         mock_inv.get_instrument_by_id.side_effect = lambda i: {
-            "globalId": f"IN{i}", "id": i, "templateId": 3, "parentContainers": [],
+            "globalId": f"IN{i}",
+            "id": i,
+            "templateId": 3,
+            "parentContainers": [],
         }
-        mock_inv.get_instrument_template_by_id.side_effect = lambda i: {"globalId": f"NT{i}", "id": i}
+        mock_inv.get_instrument_template_by_id.side_effect = lambda i: {
+            "globalId": f"NT{i}",
+            "id": i,
+        }
         mock_inv.get_container_by_id.return_value = {
-            "globalId": "IC1", "id": 1, "cType": "LIST",
+            "globalId": "IC1",
+            "id": 1,
+            "cType": "LIST",
             "locations": [{"content": {"globalId": "IN6", "id": 6, "type": "INSTRUMENT"}}],
         }
         return mock_inv
 
     def _export(self, tmp_path, **kwargs):
         args = dict(
-            output=tmp_path, all_resources=False, template_ids=None, container_ids=None,
-            sample_ids=None, instrument_template_ids=None, instrument_ids=None, no_files=True,
+            output=tmp_path,
+            all_resources=False,
+            template_ids=None,
+            container_ids=None,
+            sample_ids=None,
+            instrument_template_ids=None,
+            instrument_ids=None,
+            no_files=True,
         )
         args.update(kwargs)
         migrate.migrate_export(**args)
@@ -183,10 +222,23 @@ def _nt(gid="NT1", tid=1, desc="d", options=("a", "b"), field_ids=(11, 12)):
         "version": 3,
         "created": "2026-01-01",
         "fields": [
-            {"id": field_ids[0], "globalId": f"SF{field_ids[0]}", "name": "Serial",
-             "type": "string", "mandatory": True, "columnIndex": 1, "content": None},
-            {"id": field_ids[1], "globalId": f"SF{field_ids[1]}", "name": "Mode",
-             "type": "choice", "columnIndex": 2, "definition": {"options": list(options)}},
+            {
+                "id": field_ids[0],
+                "globalId": f"SF{field_ids[0]}",
+                "name": "Serial",
+                "type": "string",
+                "mandatory": True,
+                "columnIndex": 1,
+                "content": None,
+            },
+            {
+                "id": field_ids[1],
+                "globalId": f"SF{field_ids[1]}",
+                "name": "Mode",
+                "type": "choice",
+                "columnIndex": 2,
+                "definition": {"options": list(options)},
+            },
         ],
     }
 
@@ -197,10 +249,13 @@ class TestTemplateFingerprint:
         other.update(version=1, created="2027-02-02", iconId=-1, tags=[{"value": "x"}])
         assert migrate._template_fingerprint(_nt()) == migrate._template_fingerprint(other)
 
-    @pytest.mark.parametrize("change", [
-        dict(desc="other"),
-        dict(options=("a", "b", "c")),
-    ])
+    @pytest.mark.parametrize(
+        "change",
+        [
+            dict(desc="other"),
+            dict(options=("a", "b", "c")),
+        ],
+    )
     def test_detects_real_differences(self, change):
         assert migrate._template_fingerprint(_nt()) != migrate._template_fingerprint(_nt(**change))
 
@@ -229,20 +284,29 @@ class TestPayloads:
             {"name": "Mode", "columnIndex": 3},
         ]
         assert migrate._instrument_field_values(old, new_fields) == [
-            {"content": "SN"}, {}, {"selectedOptions": ["b"]},
+            {"content": "SN"},
+            {},
+            {"selectedOptions": ["b"]},
         ]
 
     def test_instrument_payload(self):
         inst = {
-            "name": "I", "description": "D", "tags": [{"value": "t"}],
+            "name": "I",
+            "description": "D",
+            "tags": [{"value": "t"}],
             "fields": [{"name": "Serial", "content": "SN"}],
-            "extraFields": [{"id": 1, "globalId": "EF1", "name": "Room", "type": "text", "content": "B2"}],
+            "extraFields": [
+                {"id": 1, "globalId": "EF1", "name": "Room", "type": "text", "content": "B2"}
+            ],
             "barcodes": [{"id": 4, "data": "BC", "format": "BARCODE", "description": None}],
         }
         payload = migrate._instrument_payload(inst, {"id": 7, "fields": [{"name": "Serial"}]})
         assert payload == {
-            "name": "I", "description": "D", "tags": [{"value": "t"}],
-            "templateId": 7, "fields": [{"content": "SN"}],
+            "name": "I",
+            "description": "D",
+            "tags": [{"value": "t"}],
+            "templateId": 7,
+            "fields": [{"content": "SN"}],
             "extraFields": [{"name": "Room", "type": "text", "content": "B2"}],
             "barcodes": [{"data": "BC", "format": "BARCODE"}],
         }
@@ -297,8 +361,13 @@ class TestImportInstruments:
         inv.get_instrument_template_by_id.return_value = {"id": 50, "fields": [{"name": "Serial"}]}
         inv.retrieve_api_results.return_value = {"globalId": "IN90", "id": 90}
         state = _ImportState(id_map={"NT1": "NT50"})
-        inst = {"globalId": "IN5", "id": 5, "name": "I", "templateId": 1,
-                "fields": [{"name": "Serial", "content": "SN"}]}
+        inst = {
+            "globalId": "IN5",
+            "id": 5,
+            "name": "I",
+            "templateId": 1,
+            "fields": [{"name": "Serial", "content": "SN"}],
+        }
         migrate._import_instruments(inv, [inst], state, dry_run=False)
         body = inv.retrieve_api_results.call_args.kwargs["params"]
         assert body["templateId"] == 50 and body["fields"] == [{"content": "SN"}]
@@ -311,7 +380,11 @@ class TestImportInstrumentPlacements:
 
     def _puts(self, inv):
         return [
-            (c.args[0], c.kwargs["params"].get("parentContainers"), c.kwargs["params"].get("parentLocation"))
+            (
+                c.args[0],
+                c.kwargs["params"].get("parentContainers"),
+                c.kwargs["params"].get("parentLocation"),
+            )
             for c in inv.retrieve_api_results.call_args_list
             if c.kwargs.get("request_type") == "PUT"
         ]
@@ -320,15 +393,38 @@ class TestImportInstrumentPlacements:
         inv = MagicMock()
         inv.retrieve_api_results.return_value = {"tags": []}
         inv.get_container_by_id.return_value = {"locations": [{"id": 700}, {"id": 701}]}
-        state = _ImportState(id_map={
-            "IN1": "IN11", "IN2": "IN12", "IN3": "IN13", "IN4": "IN14",
-            "IC1": "IC21", "IC2": "IC22", "IC3": "IC23",
-        })
+        state = _ImportState(
+            id_map={
+                "IN1": "IN11",
+                "IN2": "IN12",
+                "IN3": "IN13",
+                "IN4": "IN14",
+                "IC1": "IC21",
+                "IC2": "IC22",
+                "IC3": "IC23",
+            }
+        )
         instruments = [
-            self._inst("IN1", {"container_global_id": "IC1", "parent_ctype": "GRID", "grid_col": 2, "grid_row": 1}),
+            self._inst(
+                "IN1",
+                {
+                    "container_global_id": "IC1",
+                    "parent_ctype": "GRID",
+                    "grid_col": 2,
+                    "grid_row": 1,
+                },
+            ),
             self._inst("IN2", {"container_global_id": "IC2", "parent_ctype": "LIST"}),
-            self._inst("IN3", {"container_global_id": "IC3", "parent_ctype": "IMAGE",
-                               "grid_col": 5, "grid_row": 5, "marker_index": 1}),
+            self._inst(
+                "IN3",
+                {
+                    "container_global_id": "IC3",
+                    "parent_ctype": "IMAGE",
+                    "grid_col": 5,
+                    "grid_row": 5,
+                    "marker_index": 1,
+                },
+            ),
             self._inst("IN4", {"container_global_id": "BE2", "parent_ctype": "WORKBENCH"}),
         ]
         migrate._import_instrument_placements(inv, instruments, state, dry_run=False)
@@ -372,12 +468,24 @@ class TestImportFilesForInstruments:
         inv.retrieve_api_results.return_value = {"tags": [{"value": "keep"}]}
         state = _ImportState(id_map={"IN1": "IN11", "NT2": "NT20"}, reused_templates=["NT20"])
         migrate._import_preview_images(
-            inv, [], [], [], state, False, tmp_path,
-            instrument_templates=[{"globalId": "NT2", "_migration": {"preview_local": "NT2_preview.png"}}],
+            inv,
+            [],
+            [],
+            [],
+            state,
+            False,
+            tmp_path,
+            instrument_templates=[
+                {"globalId": "NT2", "_migration": {"preview_local": "NT2_preview.png"}}
+            ],
             instruments=[{"globalId": "IN1", "_migration": {"preview_local": "IN1_preview.png"}}],
         )
         inv.set_image.assert_not_called()  # the client's set_image clears tags
-        (put,) = [c for c in inv.retrieve_api_results.call_args_list if c.kwargs.get("request_type") == "PUT"]
+        (put,) = [
+            c
+            for c in inv.retrieve_api_results.call_args_list
+            if c.kwargs.get("request_type") == "PUT"
+        ]
         assert put.args[0] == "/instruments/11"
         assert put.kwargs["params"]["tags"] == [{"value": "keep"}]
         assert put.kwargs["params"]["newBase64Image"].startswith("data:image/png;base64,")
@@ -387,8 +495,14 @@ class TestImportFilesForInstruments:
         (tmp_path / "attachments" / "IN1" / "IF9_manual.pdf").write_bytes(b"%PDF")
         inv = MagicMock()
         state = _ImportState(id_map={"IN1": "IN11"})
-        inst = {"globalId": "IN1", "_migration": {"attachments": [
-            {"globalId": "IF9", "filename": "manual.pdf", "local": "IF9_manual.pdf"}]}}
+        inst = {
+            "globalId": "IN1",
+            "_migration": {
+                "attachments": [
+                    {"globalId": "IF9", "filename": "manual.pdf", "local": "IF9_manual.pdf"}
+                ]
+            },
+        }
         migrate._import_attachments(inv, [], [], [], state, False, tmp_path, instruments=[inst])
         gid, (name, _fh) = inv.upload_attachment.call_args.args
         assert (gid, name) == ("IN11", "manual.pdf")
@@ -403,9 +517,15 @@ class TestImportCommand:
 
     def _run(self, snap, **kwargs):
         args = dict(
-            input_path=snap, dry_run=False, checkpoint_file=None, skip_templates=False,
-            skip_containers=False, skip_samples=False, skip_instruments=False,
-            skip_files=True, no_reuse_templates=False,
+            input_path=snap,
+            dry_run=False,
+            checkpoint_file=None,
+            skip_templates=False,
+            skip_containers=False,
+            skip_samples=False,
+            skip_instruments=False,
+            skip_files=True,
+            no_reuse_templates=False,
         )
         args.update(kwargs)
         migrate.migrate_import(**args)
@@ -423,13 +543,28 @@ class TestImportCommand:
         mock_inv.create_instrument_template.return_value = _nt(gid="NT50", tid=50)
         mock_inv.retrieve_api_results.return_value = {"globalId": "IN90", "id": 90}
         snap = self._snapshot(
-            tmp_path, schema_version=3, instrument_templates=[_nt()],
-            instruments=[{"globalId": "IN5", "id": 5, "name": "I", "_migration": {"location": None}}],
+            tmp_path,
+            schema_version=3,
+            instrument_templates=[_nt()],
+            instruments=[
+                {"globalId": "IN5", "id": 5, "name": "I", "_migration": {"location": None}}
+            ],
         )
-        (snap / "checkpoint.json").write_text(json.dumps({
-            "id_map": {}, "numeric_map": {}, "errors": [],
-            "completed_phases": ["templates", "containers_flat", "containers_hierarchy", "samples"],
-        }))
+        (snap / "checkpoint.json").write_text(
+            json.dumps(
+                {
+                    "id_map": {},
+                    "numeric_map": {},
+                    "errors": [],
+                    "completed_phases": [
+                        "templates",
+                        "containers_flat",
+                        "containers_hierarchy",
+                        "samples",
+                    ],
+                }
+            )
+        )
         self._run(snap)
         mock_inv.create_sample_template.assert_not_called()
         mock_inv.create_instrument_template.assert_called_once()
@@ -450,12 +585,17 @@ class TestImageContainerImport:
         ic_dir.mkdir()
         (ic_dir / "IC5_background.png").write_bytes(b"\x89PNG")
         return {
-            "id": 5, "globalId": "IC5", "name": "Map", "cType": "IMAGE",
+            "id": 5,
+            "globalId": "IC5",
+            "name": "Map",
+            "cType": "IMAGE",
             "tags": [{"value": "freezer"}],
-            "_migration": {"image_container": {
-                "background_local": "IC5_background.png",
-                "locations": [{"coordX": 10, "coordY": 10}, {"coordX": 40, "coordY": 60}],
-            }},
+            "_migration": {
+                "image_container": {
+                    "background_local": "IC5_background.png",
+                    "locations": [{"coordX": 10, "coordY": 10}, {"coordX": 40, "coordY": 60}],
+                }
+            },
         }
 
     def _inv(self, persisted):
@@ -469,16 +609,23 @@ class TestImageContainerImport:
     def test_markers_in_post_no_put(self, tmp_path):
         inv = self._inv([(10, 10), (40, 60)])
         state = _ImportState()
-        migrate._import_containers_flat(inv, [self._snapshot_container(tmp_path)], state, False, tmp_path)
+        migrate._import_containers_flat(
+            inv, [self._snapshot_container(tmp_path)], state, False, tmp_path
+        )
         post = inv.create_image_container.call_args.args[0]
-        assert [(loc["coordX"], loc["coordY"]) for loc in post.data["locations"]] == [(10, 10), (40, 60)]
+        assert [(loc["coordX"], loc["coordY"]) for loc in post.data["locations"]] == [
+            (10, 10),
+            (40, 60),
+        ]
         inv.add_locations_to_image_container.assert_not_called()
         assert state.id_map["IC5"] == "IC50" and not state.errors
 
     def test_fallback_adds_missing_markers_and_restores_tags(self, tmp_path):
         inv = self._inv([(10, 10)])
         state = _ImportState()
-        migrate._import_containers_flat(inv, [self._snapshot_container(tmp_path)], state, False, tmp_path)
+        migrate._import_containers_flat(
+            inv, [self._snapshot_container(tmp_path)], state, False, tmp_path
+        )
         assert inv.add_locations_to_image_container.call_args.args[1:] == ((40, 60),)
         put = inv.retrieve_api_results.call_args
         assert put.args[0] == "/containers/50"
