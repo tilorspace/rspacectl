@@ -9,7 +9,6 @@ from ..context import get_context
 from ..exceptions import handle_api_error
 from ..ids import parse_id
 from ..output import (
-    COL_CREATED,
     COL_GLOBAL_ID,
     COL_NAME_40,
     ColumnDef,
@@ -17,7 +16,6 @@ from ..output import (
     err_console,
     print_result,
 )
-from ..utils import batch_run
 
 app = typer.Typer(no_args_is_help=True, rich_markup_mode="rich")
 
@@ -78,7 +76,7 @@ def upload_attachment(
             ctx.inv.upload_attachment_by_global_id(item_id, f)
     except FileNotFoundError:
         err_console.print(f"[red]File not found:[/red] {path}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except Exception as e:
         handle_api_error(e)
 

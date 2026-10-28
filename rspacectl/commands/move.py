@@ -151,7 +151,7 @@ def _move_instruments(
                 raise typer.Exit(1)
             cells = free[: len(instrument_ids)]
 
-    placements = dict(zip(instrument_ids, cells))
+    placements = dict(zip(instrument_ids, cells, strict=False))
 
     def _place(raw_id: str) -> None:
         cell = placements[raw_id]

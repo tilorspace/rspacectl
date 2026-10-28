@@ -179,7 +179,9 @@ def _field_updates(current_fields: list, field_args: List[str]) -> list:
             raise typer.Exit(1)
         ftype = (current.get("type") or "").lower()
         if ftype == "choice":
-            updates.append({"id": current["id"], "selectedOptions": [v.strip() for v in value.split(",")]})
+            updates.append(
+                {"id": current["id"], "selectedOptions": [v.strip() for v in value.split(",")]}
+            )
         elif ftype == "radio":
             updates.append({"id": current["id"], "selectedOptions": [value]})
         else:
@@ -202,9 +204,9 @@ def update_instrument(
 ) -> None:
     """Update an inventory instrument's name, description, tags, or field values.
 
-      rspace update instrument IN12 --field "Serial Number=SN-42" --tag "lab,confocal"
+    rspace update instrument IN12 --field "Serial Number=SN-42" --tag "lab,confocal"
 
-      rspace update instrument IN12 --latest-template
+    rspace update instrument IN12 --latest-template
     """
     ctx = get_context()
     columns = [

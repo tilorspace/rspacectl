@@ -209,8 +209,14 @@ class TestPutPreservesTags:
 class TestCreateInstrument:
     def _kwargs(self, **overrides):
         kwargs = dict(
-            name="Confocal", template=None, field=None, tag=None, description=None,
-            target=None, row=None, col=None,
+            name="Confocal",
+            template=None,
+            field=None,
+            tag=None,
+            description=None,
+            target=None,
+            row=None,
+            col=None,
         )
         kwargs.update(overrides)
         return kwargs
@@ -224,10 +230,16 @@ class TestCreateInstrument:
             ]
         }
         mock_inv.retrieve_api_results.return_value = {"globalId": "IN1"}
-        create.create_instrument(**self._kwargs(
-            template="NT9", field=["Serial=SN-1", "Mode=a,b"], tag="lab",
-            target="IC854", row=2, col=1,
-        ))
+        create.create_instrument(
+            **self._kwargs(
+                template="NT9",
+                field=["Serial=SN-1", "Mode=a,b"],
+                tag="lab",
+                target="IC854",
+                row=2,
+                col=1,
+            )
+        )
         call = mock_inv.retrieve_api_results.call_args
         assert call.args[0] == "/instruments"
         body = call.kwargs["params"]
@@ -244,11 +256,14 @@ class TestCreateInstrument:
             create.create_instrument(**self._kwargs(template="NT9"))
         mock_inv.retrieve_api_results.assert_not_called()
 
-    @pytest.mark.parametrize("overrides", [
-        {"row": 1},                             # row without col
-        {"row": 1, "col": 1},                   # cell without --target
-        {"field": ["Serial=1"]},                # --field without --template
-    ])
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"row": 1},  # row without col
+            {"row": 1, "col": 1},  # cell without --target
+            {"field": ["Serial=1"]},  # --field without --template
+        ],
+    )
     def test_invalid_option_combinations_exit(self, app_context, mock_inv, overrides):
         with pytest.raises(typer.Exit):
             create.create_instrument(**self._kwargs(**overrides))
@@ -273,15 +288,17 @@ class TestUpdateInstrument:
     def test_single_put_with_name_fields_and_preserved_tags(self, app_context, mock_inv):
         current = {
             "tags": [{"value": "keep"}],
-            "fields": [{"id": 11, "name": "Serial", "type": "string"},
-                       {"id": 12, "name": "Mode", "type": "radio"}],
+            "fields": [
+                {"id": 11, "name": "Serial", "type": "string"},
+                {"id": 12, "name": "Mode", "type": "radio"},
+            ],
         }
         mock_inv.get_instrument_by_id.return_value = current
         mock_inv.retrieve_api_results.side_effect = [current, {"globalId": "IN5"}]
         update.update_instrument("IN5", **self._kwargs(name="New", field=["Serial=S2", "Mode=x"]))
 
         mock_inv.rename.assert_not_called()  # rename alone would wipe tags
-        (path, body), = _puts(mock_inv)
+        ((path, body),) = _puts(mock_inv)
         assert path == "/instruments/5"
         assert body["name"] == "New"
         assert body["tags"] == [{"value": "keep"}]
@@ -311,10 +328,13 @@ class TestUpdateInstrument:
         mock_inv.update_instrument_template_instruments.assert_called_once_with(3)
 
     def test_update_sample_keeps_tags(self, app_context, mock_inv):
-        mock_inv.retrieve_api_results.side_effect = [{"tags": [{"value": "t"}]}, {"globalId": "SA1"}]
+        mock_inv.retrieve_api_results.side_effect = [
+            {"tags": [{"value": "t"}]},
+            {"globalId": "SA1"},
+        ]
         update.update_sample("SA1", name="n", description="d", tag=None)
         mock_inv.rename.assert_not_called()
-        (_, body), = _puts(mock_inv)
+        ((_, body),) = _puts(mock_inv)
         assert body == {"name": "n", "description": "d", "tags": [{"value": "t"}]}
 
 
@@ -350,11 +370,14 @@ class TestMoveInstruments:
         self._move(["IN1"], "IC854", row=2, col=2)
         assert self._placed(mock_inv)[0][2] == {"coordX": 2, "coordY": 2}
 
-    @pytest.mark.parametrize("ids,kwargs", [
-        (["IN1", "IN2"], {"row": 1, "col": 2}),          # exact cell for several
-        (["IN1", "IN2", "IN3", "IN4"], {"strategy": "row"}),  # only 3 free cells
-        (["IN1", "SS9"], {}),                            # mixed items into a grid
-    ])
+    @pytest.mark.parametrize(
+        "ids,kwargs",
+        [
+            (["IN1", "IN2"], {"row": 1, "col": 2}),  # exact cell for several
+            (["IN1", "IN2", "IN3", "IN4"], {"strategy": "row"}),  # only 3 free cells
+            (["IN1", "SS9"], {}),  # mixed items into a grid
+        ],
+    )
     def test_grid_rejections(self, app_context, mock_inv, ids, kwargs):
         mock_inv.get_container_by_id.return_value = GRID_2x2
         with pytest.raises(typer.Exit):
@@ -378,7 +401,8 @@ class TestDeleteAndTag:
     def test_delete_instruments(self, app_context, mock_inv):
         delete.delete_instrument(["IN1", "2"])
         assert [c.args for c in mock_inv.doDelete.call_args_list] == [
-            ("instruments", 1), ("instruments", 2)
+            ("instruments", 1),
+            ("instruments", 2),
         ]
 
     def test_delete_instrument_template(self, app_context, mock_inv):
@@ -390,10 +414,13 @@ class TestDeleteAndTag:
         delete.delete_container(["IC7"])
         mock_inv.doDelete.assert_called_once_with("containers", 7)
 
-    @pytest.mark.parametrize("gid,endpoint", [
-        ("IN4", "/instruments/4"),
-        ("NT5", "/instrumentTemplates/5"),
-    ])
+    @pytest.mark.parametrize(
+        "gid,endpoint",
+        [
+            ("IN4", "/instruments/4"),
+            ("NT5", "/instrumentTemplates/5"),
+        ],
+    )
     def test_tag_endpoints(self, app_context, mock_inv, gid, endpoint):
         mock_inv.retrieve_api_results.return_value = {"globalId": gid, "tags": []}
         tag.tag(gid, "a,b")

@@ -7,7 +7,7 @@ import typer
 from ..context import get_context
 from ..exceptions import handle_api_error
 from ..ids import parse_id
-from ..output import COL_GLOBAL_ID, ColumnDef, console, err_console, print_result
+from ..output import ColumnDef, console, err_console, print_result
 
 _PERMISSION_CHOICES = ["read", "edit"]
 

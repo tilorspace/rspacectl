@@ -1,13 +1,10 @@
 """rspace search <query> — cross-entity full-text search."""
 
-from typing import Optional
-
 import typer
 from rspace_client.inv.inv import Pagination, ResultType
 
 from ..context import get_context
 from ..output import (
-    COL_CREATED,
     COL_GLOBAL_ID,
     COL_MODIFIED,
     COL_NAME_40,

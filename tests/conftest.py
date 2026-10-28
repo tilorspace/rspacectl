@@ -1,7 +1,8 @@
 """Shared fixtures for rspacectl tests."""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from rspacectl.context import AppContext, set_context
 from rspacectl.output import OutputFormat

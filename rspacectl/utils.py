@@ -32,10 +32,10 @@ def load_json_file(path: Path) -> dict:
         return json.loads(path.read_text())
     except FileNotFoundError:
         err_console.print(f"[red]File not found:[/red] {path}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except json.JSONDecodeError as e:
         err_console.print(f"[red]Invalid JSON in {path}:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 def batch_run(

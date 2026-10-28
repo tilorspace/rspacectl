@@ -16,16 +16,21 @@ console = Console()
 
 def configure(
     profile: str = typer.Option(
-        DEFAULT_PROFILE, "--profile", "-p",
+        DEFAULT_PROFILE,
+        "--profile",
+        "-p",
         help="Profile name to configure (default: 'default').",
     ),
     keychain: bool = typer.Option(
-        False, "--keychain",
+        False,
+        "--keychain",
         help="Store credentials in the OS keychain instead of a dotenv file. "
-             "Requires: pip install 'rspacectl\\[keychain]'",
+        "Requires: pip install 'rspacectl\\[keychain]'",
     ),
     list_: bool = typer.Option(
-        False, "--list", "-l",
+        False,
+        "--list",
+        "-l",
         help="List all configured profiles and exit.",
     ),
 ) -> None:
@@ -56,6 +61,7 @@ def configure(
 # Sub-actions
 # ---------------------------------------------------------------------------
 
+
 def _cmd_list_profiles() -> None:
     profiles = list_profiles()
     console.print("[bold]Configured profiles:[/bold]")
@@ -67,6 +73,7 @@ def _cmd_list_profiles() -> None:
             sources.append(f"file: [cyan]{file}[/cyan]")
         try:
             import keyring  # type: ignore[import]
+
             if keyring.get_password(service, "api_key"):
                 sources.append("keychain")
         except ImportError:
@@ -100,8 +107,9 @@ def _cmd_interactive(profile: str, use_keychain: bool) -> None:
         save_config(url, api_key, profile=profile, use_keychain=use_keychain)
     except Exception as e:
         from rich.markup import escape
+
         console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     if use_keychain:
         service = _keychain_service(profile)
@@ -111,7 +119,6 @@ def _cmd_interactive(profile: str, use_keychain: bool) -> None:
         )
     else:
         console.print(
-            f"\n[green]Saved.[/green] Configuration written to "
-            f"[cyan]{_config_file(profile)}[/cyan]"
+            f"\n[green]Saved.[/green] Configuration written to [cyan]{_config_file(profile)}[/cyan]"
         )
     console.print("Run [bold]rspace status[/bold] to verify the connection.")

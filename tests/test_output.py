@@ -3,9 +3,6 @@
 import csv
 import io
 import json
-from unittest.mock import patch
-
-import pytest
 
 from rspacectl.output import (
     ColumnDef,
@@ -15,7 +12,6 @@ from rspacectl.output import (
     _truncate_timestamp,
     print_result,
 )
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for helper functions

@@ -51,6 +51,7 @@ class ConfigError(Exception):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _config_file(profile: str) -> Path:
     if profile == DEFAULT_PROFILE:
         return _CONFIG_DIR / ".rspacectl"
@@ -83,7 +84,7 @@ def _save_to_keychain(url: str, api_key: str, profile: str) -> None:
         raise ConfigError(
             "The 'keyring' package is required for keychain storage.\n"
             "Install it with:  pip install rspacectl[keychain]"
-        )
+        ) from None
     service = _keychain_service(profile)
     keyring.set_password(service, "url", url.rstrip("/"))
     keyring.set_password(service, "api_key", api_key)
@@ -107,6 +108,7 @@ def _delete_from_keychain(profile: str) -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def load_config(
     url_override: Optional[str] = None,
@@ -163,6 +165,7 @@ def load_config(
 
     if url.startswith("http://"):
         from .output import err_console
+
         err_console.print(
             "[yellow]Warning:[/yellow] RSPACE_URL uses HTTP — your API key will be sent "
             "unencrypted. Use HTTPS unless this is a local development server."
@@ -191,6 +194,7 @@ def save_config(
 
     # File-based storage — created with mode 600 atomically.
     import os as _os
+
     config_file = _config_file(profile)
     content = f"{URL_KEY}={url.rstrip('/')}\n{APIKEY_KEY}={api_key}\n"
     fd = _os.open(config_file, _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
@@ -212,7 +216,7 @@ def list_profiles() -> list:
         if path.name == ".rspacectl":
             profiles.append(DEFAULT_PROFILE)
         elif path.name.startswith(".rspacectl.") and not path.suffix == ".bak":
-            profiles.append(path.name[len(".rspacectl."):])
+            profiles.append(path.name[len(".rspacectl.") :])
 
     # Check keychain for any of the found profiles (and default)
     for candidate in set(profiles) | {DEFAULT_PROFILE}:

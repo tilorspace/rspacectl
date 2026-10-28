@@ -314,6 +314,7 @@ class TestCreateSampleName:
             create.create_sample(**_sample_kwargs(name=None))
         mock_inv.create_sample.assert_not_called()
 
+
 # ---------------------------------------------------------------------------
 # Found by the live end-to-end run (scripts/e2e_review_fixes.py)
 # ---------------------------------------------------------------------------
