@@ -5,8 +5,8 @@ description = "Command-line interface for RSpace ELN and Inventory"
 authors = ["ResearchSpace <info@researchspace.com>"]
 license = "Apache-2.0"
 readme = "README.md"
-homepage = "https://github.com/rspace-os/rspacectl"
-repository = "https://github.com/rspace-os/rspacectl"
+homepage = "https://github.com/tilorspace/rspacectl"
+repository = "https://github.com/tilorspace/rspacectl"
 keywords = ["rspace", "eln", "inventory", "cli", "laboratory"]
 classifiers = [
     "Development Status :: 3 - Alpha",
